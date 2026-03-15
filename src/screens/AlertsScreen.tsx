@@ -5,7 +5,7 @@ import { FloodZone, addFloodZone, createZone, getFloodZones, reconcileStateSever
 import { fetchLiveWeatherAndCCTV, fetchStateTownsWithWeather } from '../services/gemini';
 
 interface AlertsScreenProps {
-  onTabChange: (tab: 'map' | 'report' | 'alert') => void;
+  onTabChange: (tab: 'map' | 'report' | 'alert' | 'dashboard') => void;
   onAlertClick: (zoneId: string) => void;
   onScanClick: () => void;
   initialState?: string | null;

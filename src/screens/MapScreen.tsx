@@ -32,7 +32,7 @@ import { isMalaysianLocation, getMalaysiaLocationWarning } from '../utils/locati
 
 interface MapScreenProps {
   onScanClick: (location?: { lat: number; lng: number; address: string }) => void;
-  onTabChange: (tab: 'map' | 'report' | 'alert') => void;
+  onTabChange: (tab: 'map' | 'report' | 'alert' | 'dashboard') => void;
   initialShowLocationModal?: boolean;
 }
 

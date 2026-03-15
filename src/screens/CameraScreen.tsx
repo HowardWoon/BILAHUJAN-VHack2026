@@ -5,7 +5,7 @@ import { analyzeFloodImage, FloodAnalysisResult } from '../services/gemini';
 interface CameraScreenProps {
   onBack: () => void;
   onAnalysisComplete: (result: FloodAnalysisResult, imageUri: string) => void;
-  onTabChange: (tab: 'map' | 'report' | 'alert') => void;
+  onTabChange: (tab: 'map' | 'report' | 'alert' | 'dashboard') => void;
 }
 
 // ── Image compression helper ──────────────────────────────────────────────────

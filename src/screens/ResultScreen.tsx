@@ -49,7 +49,7 @@ interface ResultScreenProps {
   imageUri: string;
   location: { lat: number; lng: number; address: string } | null;
   onBack: () => void;
-  onTabChange: (tab: 'map' | 'report' | 'alert') => void;
+  onTabChange: (tab: 'map' | 'report' | 'alert' | 'dashboard') => void;
   zoneId?: string | null;
   onUploadAlert?: (zoneId: string, zone: import('../data/floodZones').FloodZone) => void;
 }

@@ -6,6 +6,7 @@ import ResultScreen from './screens/ResultScreen';
 import AlertsScreen from './screens/AlertsScreen';
 import AlertDetailScreen from './screens/AlertDetailScreen';
 import ReportScreen from './screens/ReportScreen';
+import { GovernmentDashboard } from './screens/GovernmentDashboard';
 import { FloodAnalysisResult } from './services/gemini';
 import { FloodZone } from './data/floodZones';
 import { 
@@ -16,7 +17,7 @@ import {
 import { getFloodZones } from './data/floodZones';
 import { PrivacyNotice } from './components/PrivacyNotice';
 
-type Screen = 'splash' | 'map' | 'camera' | 'result' | 'alerts' | 'alert-detail' | 'report';
+type Screen = 'splash' | 'map' | 'camera' | 'result' | 'alerts' | 'alert-detail' | 'report' | 'dashboard';
 
 export default function App() {
   const [currentScreen, setCurrentScreen] = useState<Screen>('splash');
@@ -67,12 +68,13 @@ export default function App() {
     setNotifications([]);
   };
 
-  const handleTabChange = (tab: 'map' | 'report' | 'alert') => {
+  const handleTabChange = (tab: 'map' | 'report' | 'alert' | 'dashboard') => {
     if (tab === 'map') {
       setStartMapWithScan(false);
       setCurrentScreen('map');
     }
     if (tab === 'report') setCurrentScreen('report');
+    if (tab === 'dashboard') setCurrentScreen('dashboard');
     if (tab === 'alert') {
       setSelectedAlertState(null); // normal tab navigation → show full list
       setCurrentScreen('alerts');
@@ -173,6 +175,10 @@ export default function App() {
           onClearNotifications={clearNotifications}
           onNotificationsReady={addNotifications}
         />
+      )}
+
+      {currentScreen === 'dashboard' && (
+        <GovernmentDashboard onTabChange={handleTabChange} />
       )}
       
       {currentScreen === 'alert-detail' && (

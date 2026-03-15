@@ -1,5 +1,7 @@
 {
   "projects": {
-    "default": "bilahujan-app"
+    "default": "bilahujan-b880a",
+    "kitahack": "bilahujan-b880a",
+    "vhack": "bilahujan-vhack"
   }
 }

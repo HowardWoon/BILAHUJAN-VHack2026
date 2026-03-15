@@ -10,8 +10,7 @@ import { rtdb } from "../firebase";
 //   VITE_GEMINI_API_KEY=your_key npm run build
 // ─────────────────────────────────────────────────────────────────────────────
 const GEMINI_API_KEY: string =
-  (import.meta.env.VITE_GEMINI_API_KEY as string) ||
-  (process.env.GEMINI_API_KEY as string) || '';
+  (import.meta.env.VITE_GEMINI_API_KEY as string) || '';
 
 // A valid Google API key always starts with "AIza" and is 39 chars long
 const isKeyValid = (k: string) => typeof k === 'string' && k.startsWith('AIza') && k.length >= 35;
@@ -94,7 +93,7 @@ export interface AudioAnalysisResult {
 // ─────────────────────────────────────────────────────────────────────────────
 // analyzeFloodImage
 //
-// Model: gemini-2.5-flash  (REST v1beta — confirmed working Feb 2026)
+// Model: gemini-1.5-flash  (REST v1beta)
 // thinkingBudget: 0  → single-part response, no markdown wrapping
 // Strategy: Firebase cache → REST fetch → save result to cache
 // ─────────────────────────────────────────────────────────────────────────────
@@ -163,8 +162,8 @@ YOU MUST return ONLY the JSON object below. No markdown. No code fences. No text
 
 {"isRelevant":true,"rejectionReason":"","estimatedDepth":"~0.3m","detectedHazards":"Submerged manholes, floating debris","passability":"Pedestrians:Caution|Motorcycles:Avoid|Cars:Avoid|4x4:Caution","aiConfidence":80,"directive":"Water is knee-deep. Avoid crossing. Move to higher ground.","riskScore":5,"severity":"MODERATE","waterDepth":"Knee-Deep (0.3-0.5m)","waterCurrent":"Slow","infrastructureStatus":"Roads partially submerged","humanRisk":"Moderate","eventType":"Flash Flood","estimatedStartTime":"Already in progress","estimatedEndTime":"${new Date(Date.now() + 7200000).toISOString()}"}`;
 
-  // ── REST API — gemini-2.5-flash on v1beta (confirmed working with new keys) ──
-  const REST_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`;
+  // ── REST API — gemini-1.5-flash on v1beta ──
+  const REST_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`;
 
   const body = {
     contents: [{
@@ -233,7 +232,7 @@ YOU MUST return ONLY the JSON object below. No markdown. No code fences. No text
   const json = await response.json();
   console.log('[Gemini] Candidates count:', json?.candidates?.length ?? 0);
 
-  // gemini-2.5-flash may return multiple parts (thoughts + answer) — find the last text part
+  // gemini-1.5-flash may return multiple parts — find the last answer text part
   const parts: any[] = json?.candidates?.[0]?.content?.parts ?? [];
   const rawText: string = [...parts].reverse().find((p: any) => p.text && !p.thought)?.text ?? parts[0]?.text ?? '';
   console.log('[Gemini] Parts count:', parts.length, '| Raw text (first 400 chars):', rawText.slice(0, 400));

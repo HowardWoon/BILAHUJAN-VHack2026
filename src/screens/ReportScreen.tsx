@@ -10,7 +10,7 @@ import { officialLogos } from '../data/officialLogos';
 const GOOGLE_MAPS_LIBRARIES: ('places')[] = ['places'];
 
 interface ReportScreenProps {
-  onTabChange: (tab: 'map' | 'report' | 'alert') => void;
+  onTabChange: (tab: 'map' | 'report' | 'alert' | 'dashboard') => void;
   onScanClick: () => void;
   imageUri: string | null;
   onClearImage: () => void;

@@ -26,7 +26,7 @@ interface AlertDetailScreenProps {
   zoneId: string | null;
   onBack: () => void;
   onScanClick: () => void;
-  onTabChange: (tab: 'map' | 'report' | 'alert') => void;
+  onTabChange: (tab: 'map' | 'report' | 'alert' | 'dashboard') => void;
 }
 
 export default function AlertDetailScreen({ zoneId, onBack, onScanClick, onTabChange }: AlertDetailScreenProps) {
