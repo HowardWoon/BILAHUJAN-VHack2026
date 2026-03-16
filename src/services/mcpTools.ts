@@ -38,6 +38,33 @@ const normalizeSeverity = (value: any): number => {
   return 0;
 };
 
+const toTimestampMs = (value: unknown): number => {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value < 1_000_000_000_000 ? value * 1000 : value;
+  }
+
+  if (typeof value === 'string') {
+    if (/^\d+$/.test(value.trim())) {
+      const numeric = Number(value.trim());
+      if (Number.isFinite(numeric)) {
+        return numeric < 1_000_000_000_000 ? numeric * 1000 : numeric;
+      }
+    }
+
+    const parsed = Date.parse(value);
+    return Number.isNaN(parsed) ? 0 : parsed;
+  }
+
+  if (value && typeof value === 'object') {
+    const maybeSeconds = (value as any).seconds;
+    if (typeof maybeSeconds === 'number' && Number.isFinite(maybeSeconds)) {
+      return maybeSeconds * 1000;
+    }
+  }
+
+  return 0;
+};
+
 export const toolRegistry: MCPTool[] = [
   {
     name: 'scan_flood_zone',
@@ -165,7 +192,9 @@ export const toolRegistry: MCPTool[] = [
 
         const activeNodes = Object.entries(reportsObj)
           .filter(([, report]) => {
-            const timestamp = Number(report?.timestamp ?? 0);
+            const timestamp = toTimestampMs(
+              report?.timestamp ?? report?.createdAt ?? report?.submittedAt ?? report?.updatedAt
+            );
             return Number.isFinite(timestamp) && timestamp > activeThreshold;
           })
           .map(([reportId, report], index) => ({
@@ -173,7 +202,9 @@ export const toolRegistry: MCPTool[] = [
             reportId,
             location: report?.location || { lat: 0, lng: 0, address: 'Unknown' },
             severity: normalizeSeverity(report?.analysisResult?.riskScore ?? report?.severity),
-            timestamp: report?.timestamp || 0
+            timestamp: toTimestampMs(
+              report?.timestamp ?? report?.createdAt ?? report?.submittedAt ?? report?.updatedAt
+            )
           }));
 
         return buildResult(toolName, true, { nodeCount: activeNodes.length, nodes: activeNodes });

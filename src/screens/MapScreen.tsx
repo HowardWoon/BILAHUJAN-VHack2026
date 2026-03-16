@@ -22,6 +22,26 @@ const STATE_RADIUS_M: Record<string, number> = {
   'Putrajaya':          8000,
   'Labuan':             6000,
 };
+
+// Fallback geographic centres for each state — used when Firebase zone has missing/zero centre coords
+const STATE_CENTERS: Record<string, { lat: number; lng: number }> = {
+  'Sarawak':          { lat: 2.50,  lng: 113.50 },
+  'Sabah':            { lat: 5.98,  lng: 116.07 },
+  'Pahang':           { lat: 3.81,  lng: 103.32 },
+  'Perak':            { lat: 4.59,  lng: 101.09 },
+  'Johor':            { lat: 1.49,  lng: 103.74 },
+  'Kelantan':         { lat: 6.12,  lng: 102.23 },
+  'Terengganu':       { lat: 5.33,  lng: 103.15 },
+  'Kedah':            { lat: 6.12,  lng: 100.36 },
+  'Selangor':         { lat: 3.07,  lng: 101.51 },
+  'Negeri Sembilan':  { lat: 2.72,  lng: 101.94 },
+  'Penang':           { lat: 5.35,  lng: 100.28 },
+  'Melaka':           { lat: 2.19,  lng: 102.25 },
+  'Perlis':           { lat: 6.44,  lng: 100.20 },
+  'Kuala Lumpur':     { lat: 3.14,  lng: 101.69 },
+  'Putrajaya':        { lat: 2.92,  lng: 101.69 },
+  'Labuan':           { lat: 5.28,  lng: 115.24 },
+};
 import BottomNav from '../components/BottomNav';
 import StatusBar from '../components/StatusBar';
 import { PrivacyNotice } from '../components/PrivacyNotice';
@@ -536,6 +556,13 @@ export default function MapScreen({ onScanClick, onTabChange, initialShowLocatio
     const severity = Math.floor(pseudoRandom(1, 10));
     const drainageBlockage = Math.floor(pseudoRandom(10, 99));
     const rainfall = Math.floor(pseudoRandom(0, 100));
+    const now = new Date();
+    const estimatedStartTime = severity >= 4 ? new Date(now.getTime() - 60 * 60 * 1000).toISOString() : undefined;
+    const estimatedEndTime = severity >= 8
+      ? new Date(now.getTime() + 18 * 60 * 60 * 1000).toISOString()
+      : severity >= 4
+      ? new Date(now.getTime() + 10 * 60 * 60 * 1000).toISOString()
+      : undefined;
     
     let aiAnalysisText = "Normal conditions. No immediate flood risk detected.";
     if (severity >= 8) {
@@ -582,6 +609,10 @@ export default function MapScreen({ onScanClick, onTabChange, initialShowLocatio
       sources: ['AI Simulation', 'Weather API'],
       terrain: { type: terrainTypes[terrainIndex], label: terrainLabels[terrainIndex] },
       historical: { frequency: historicalFreqs[historicalIndex], status: historicalStatuses[historicalIndex] }
+      ,
+      estimatedStartTime,
+      estimatedEndTime,
+      status: severity >= 4 ? 'active' : 'resolved'
     };
   };
 
@@ -625,6 +656,15 @@ export default function MapScreen({ onScanClick, onTabChange, initialShowLocatio
         sources: ['Gemini AI', 'Google Search', 'MetMalaysia', 'JPS'],
         terrain: risk.terrain,
         historical: risk.historical
+        ,
+        estimatedStartTime: risk.severity >= 4 ? new Date(Date.now() - 60 * 60 * 1000).toISOString() : undefined,
+        estimatedEndTime:
+          risk.severity >= 8
+            ? new Date(Date.now() + 18 * 60 * 60 * 1000).toISOString()
+            : risk.severity >= 4
+            ? new Date(Date.now() + 10 * 60 * 60 * 1000).toISOString()
+            : undefined,
+        status: risk.severity >= 4 ? 'active' : 'resolved'
       };
       if (requestId !== undefined && requestId !== searchRequestIdRef.current) return;
       setLocationWarning('');
@@ -890,6 +930,33 @@ export default function MapScreen({ onScanClick, onTabChange, initialShowLocatio
     return { fill: '#22c55e', stroke: '#16a34a' };
   };
 
+  const getEndsInLabel = useCallback((zone: FloodZone): string | null => {
+    const rawEnd = zone.estimatedEndTime;
+    if (!rawEnd || rawEnd === 'N/A' || rawEnd === 'Unknown') {
+      return null;
+    }
+
+    const end = new Date(rawEnd);
+    if (Number.isNaN(end.getTime())) {
+      return null;
+    }
+
+    const remainingMs = end.getTime() - Date.now();
+    if (remainingMs <= 0) {
+      return 'Ended';
+    }
+
+    const totalMinutes = Math.floor(remainingMs / 60000);
+    const hours = Math.floor(totalMinutes / 60);
+    const minutes = totalMinutes % 60;
+
+    if (hours <= 0) {
+      return `Ends in ${minutes}m`;
+    }
+
+    return `Ends in ${hours}h ${minutes}m`;
+  }, []);
+
   const getPolygonOptions = (zone: FloodZone) => {
     const { fill, stroke } = getZoneColors(zone.severity);
     return {
@@ -937,10 +1004,13 @@ export default function MapScreen({ onScanClick, onTabChange, initialShowLocatio
               {stateCircles.map(zone => {
                 const { fill, stroke } = getZoneColors(zone.severity);
                 const radius = STATE_RADIUS_M[zone.state] ?? 40000;
+                const fallbackCenter = STATE_CENTERS[zone.state] ?? { lat: 4.5, lng: 109.0 };
+                const circleLat = (zone.center?.lat && zone.center.lat !== 0) ? zone.center.lat : fallbackCenter.lat;
+                const circleLng = (zone.center?.lng && zone.center.lng !== 0) ? zone.center.lng : fallbackCenter.lng;
                 return (
                   <Circle
                     key={`circle_${zone.state}`}
-                    center={{ lat: zone.center.lat, lng: zone.center.lng }}
+                    center={{ lat: circleLat, lng: circleLng }}
                     radius={radius}
                     options={{
                       fillColor: fill,
@@ -1085,6 +1155,14 @@ export default function MapScreen({ onScanClick, onTabChange, initialShowLocatio
                       {searchedZone.severity >= 8 ? 'Extreme Alert' : searchedZone.severity >= 4 ? 'Warning' : 'Safe'}
                     </span>
                   </div>
+                  {getEndsInLabel(searchedZone) && (
+                    <div className="mt-3 flex justify-center">
+                      <span className="inline-flex items-center gap-1 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-100 px-3 py-1 text-[10px] font-bold uppercase tracking-wide">
+                        <span className="material-icons-round text-[12px]">schedule</span>
+                        {getEndsInLabel(searchedZone)}
+                      </span>
+                    </div>
+                  )}
                 </div>
 
                 {/* Gemini AI Analysis Card */}
@@ -1437,6 +1515,14 @@ export default function MapScreen({ onScanClick, onTabChange, initialShowLocatio
                       style={{ width: `${selectedZone.severity * 10}%` }}
                     />
                   </div>
+                  {getEndsInLabel(selectedZone) && (
+                    <div className="mt-3 flex justify-center">
+                      <span className="inline-flex items-center gap-1 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-100 px-3 py-1 text-[10px] font-bold uppercase tracking-wide">
+                        <span className="material-icons-round text-[12px]">schedule</span>
+                        {getEndsInLabel(selectedZone)}
+                      </span>
+                    </div>
+                  )}
                 </div>
 
                 {/* Gemini AI Analysis */}

@@ -1,7 +1,7 @@
 /**
  * BILAHUJAN — Historical Malaysian Flood Dataset
  * Pre-seeded data representing verified flood incidents across all 16 states.
- * Timestamps are recent (1–25 days ago) so they appear under the "Last 30 Days" filter.
+ * Timestamps are refreshed to the last 2 hours for hackathon demo realism.
  * All records carry isHistorical: true so they can be filtered separately if needed.
  */
 
@@ -21,7 +21,10 @@ export interface HistoricalFloodRecord {
   affectedResidents: number;
 }
 
-export const MALAYSIAN_FLOOD_HISTORY: HistoricalFloodRecord[] = [
+const RECENT_HISTORY_WINDOW_MS = 2 * 60 * 60 * 1000;
+const generateRecentTimestamp = () => Date.now() - Math.floor(Math.random() * RECENT_HISTORY_WINDOW_MS);
+
+const BASE_MALAYSIAN_FLOOD_HISTORY: HistoricalFloodRecord[] = [
   // ─── KUALA LUMPUR — high severity, frequent floods ───
   {
     id: 'hist_kl_001',
@@ -32,7 +35,7 @@ export const MALAYSIAN_FLOOD_HISTORY: HistoricalFloodRecord[] = [
     rainfall: 145,
     drainageBlockage: 75,
     center: { lat: 3.1739, lng: 101.6869 },
-    timestamp: Date.now() - 2 * 24 * 60 * 60 * 1000,
+    timestamp: generateRecentTimestamp(),
     eventType: 'Flash Flood',
     waterDepth: '0.6m',
     reportCount: 14,
@@ -47,7 +50,7 @@ export const MALAYSIAN_FLOOD_HISTORY: HistoricalFloodRecord[] = [
     rainfall: 189,
     drainageBlockage: 82,
     center: { lat: 3.1466, lng: 101.71 },
-    timestamp: Date.now() - 5 * 24 * 60 * 60 * 1000,
+    timestamp: generateRecentTimestamp(),
     eventType: 'Flash Flood',
     waterDepth: '0.9m',
     reportCount: 31,
@@ -62,7 +65,7 @@ export const MALAYSIAN_FLOOD_HISTORY: HistoricalFloodRecord[] = [
     rainfall: 112,
     drainageBlockage: 68,
     center: { lat: 3.1628, lng: 101.6981 },
-    timestamp: Date.now() - 12 * 24 * 60 * 60 * 1000,
+    timestamp: generateRecentTimestamp(),
     eventType: 'Drain Overflow',
     waterDepth: '0.4m',
     reportCount: 8,
@@ -79,7 +82,7 @@ export const MALAYSIAN_FLOOD_HISTORY: HistoricalFloodRecord[] = [
     rainfall: 201,
     drainageBlockage: 88,
     center: { lat: 3.0733, lng: 101.5185 },
-    timestamp: Date.now() - 1 * 24 * 60 * 60 * 1000,
+    timestamp: generateRecentTimestamp(),
     eventType: 'Flash Flood',
     waterDepth: '1.1m',
     reportCount: 42,
@@ -94,7 +97,7 @@ export const MALAYSIAN_FLOOD_HISTORY: HistoricalFloodRecord[] = [
     rainfall: 267,
     drainageBlockage: 91,
     center: { lat: 3.0449, lng: 101.4454 },
-    timestamp: Date.now() - 3 * 24 * 60 * 60 * 1000,
+    timestamp: generateRecentTimestamp(),
     eventType: 'River Overflow',
     waterDepth: '1.4m',
     reportCount: 67,
@@ -109,7 +112,7 @@ export const MALAYSIAN_FLOOD_HISTORY: HistoricalFloodRecord[] = [
     rainfall: 156,
     drainageBlockage: 79,
     center: { lat: 3.1073, lng: 101.6255 },
-    timestamp: Date.now() - 8 * 24 * 60 * 60 * 1000,
+    timestamp: generateRecentTimestamp(),
     eventType: 'Flash Flood',
     waterDepth: '0.7m',
     reportCount: 23,
@@ -124,7 +127,7 @@ export const MALAYSIAN_FLOOD_HISTORY: HistoricalFloodRecord[] = [
     rainfall: 134,
     drainageBlockage: 72,
     center: { lat: 3.0474, lng: 101.5831 },
-    timestamp: Date.now() - 15 * 24 * 60 * 60 * 1000,
+    timestamp: generateRecentTimestamp(),
     eventType: 'Flash Flood',
     waterDepth: '0.5m',
     reportCount: 19,
@@ -141,7 +144,7 @@ export const MALAYSIAN_FLOOD_HISTORY: HistoricalFloodRecord[] = [
     rainfall: 312,
     drainageBlockage: 85,
     center: { lat: 1.7297, lng: 103.9019 },
-    timestamp: Date.now() - 4 * 24 * 60 * 60 * 1000,
+    timestamp: generateRecentTimestamp(),
     eventType: 'River Overflow',
     waterDepth: '1.6m',
     reportCount: 89,
@@ -156,7 +159,7 @@ export const MALAYSIAN_FLOOD_HISTORY: HistoricalFloodRecord[] = [
     rainfall: 178,
     drainageBlockage: 76,
     center: { lat: 1.4927, lng: 103.7414 },
-    timestamp: Date.now() - 10 * 24 * 60 * 60 * 1000,
+    timestamp: generateRecentTimestamp(),
     eventType: 'Flash Flood',
     waterDepth: '0.8m',
     reportCount: 34,
@@ -171,7 +174,7 @@ export const MALAYSIAN_FLOOD_HISTORY: HistoricalFloodRecord[] = [
     rainfall: 224,
     drainageBlockage: 83,
     center: { lat: 2.5143, lng: 102.8151 },
-    timestamp: Date.now() - 18 * 24 * 60 * 60 * 1000,
+    timestamp: generateRecentTimestamp(),
     eventType: 'Flash Flood',
     waterDepth: '1.0m',
     reportCount: 45,
@@ -188,7 +191,7 @@ export const MALAYSIAN_FLOOD_HISTORY: HistoricalFloodRecord[] = [
     rainfall: 245,
     drainageBlockage: 80,
     center: { lat: 3.8077, lng: 103.326 },
-    timestamp: Date.now() - 6 * 24 * 60 * 60 * 1000,
+    timestamp: generateRecentTimestamp(),
     eventType: 'Flash Flood',
     waterDepth: '1.0m',
     reportCount: 56,
@@ -203,7 +206,7 @@ export const MALAYSIAN_FLOOD_HISTORY: HistoricalFloodRecord[] = [
     rainfall: 189,
     drainageBlockage: 71,
     center: { lat: 3.4519, lng: 102.4186 },
-    timestamp: Date.now() - 20 * 24 * 60 * 60 * 1000,
+    timestamp: generateRecentTimestamp(),
     eventType: 'River Overflow',
     waterDepth: '0.9m',
     reportCount: 28,
@@ -220,7 +223,7 @@ export const MALAYSIAN_FLOOD_HISTORY: HistoricalFloodRecord[] = [
     rainfall: 445,
     drainageBlockage: 95,
     center: { lat: 6.1254, lng: 102.2381 },
-    timestamp: Date.now() - 7 * 24 * 60 * 60 * 1000,
+    timestamp: generateRecentTimestamp(),
     eventType: 'Monsoon Flood',
     waterDepth: '2.1m',
     reportCount: 134,
@@ -235,7 +238,7 @@ export const MALAYSIAN_FLOOD_HISTORY: HistoricalFloodRecord[] = [
     rainfall: 389,
     drainageBlockage: 92,
     center: { lat: 6.0432, lng: 102.1398 },
-    timestamp: Date.now() - 9 * 24 * 60 * 60 * 1000,
+    timestamp: generateRecentTimestamp(),
     eventType: 'Monsoon Flood',
     waterDepth: '1.8m',
     reportCount: 98,
@@ -252,7 +255,7 @@ export const MALAYSIAN_FLOOD_HISTORY: HistoricalFloodRecord[] = [
     rainfall: 267,
     drainageBlockage: 78,
     center: { lat: 5.3296, lng: 103.137 },
-    timestamp: Date.now() - 11 * 24 * 60 * 60 * 1000,
+    timestamp: generateRecentTimestamp(),
     eventType: 'Coastal Flood',
     waterDepth: '1.1m',
     reportCount: 62,
@@ -269,7 +272,7 @@ export const MALAYSIAN_FLOOD_HISTORY: HistoricalFloodRecord[] = [
     rainfall: 167,
     drainageBlockage: 74,
     center: { lat: 5.4141, lng: 100.3288 },
-    timestamp: Date.now() - 3 * 24 * 60 * 60 * 1000,
+    timestamp: generateRecentTimestamp(),
     eventType: 'Flash Flood',
     waterDepth: '0.7m',
     reportCount: 37,
@@ -284,7 +287,7 @@ export const MALAYSIAN_FLOOD_HISTORY: HistoricalFloodRecord[] = [
     rainfall: 145,
     drainageBlockage: 69,
     center: { lat: 5.2964, lng: 100.2654 },
-    timestamp: Date.now() - 14 * 24 * 60 * 60 * 1000,
+    timestamp: generateRecentTimestamp(),
     eventType: 'Industrial Zone Flood',
     waterDepth: '0.5m',
     reportCount: 21,
@@ -301,7 +304,7 @@ export const MALAYSIAN_FLOOD_HISTORY: HistoricalFloodRecord[] = [
     rainfall: 198,
     drainageBlockage: 77,
     center: { lat: 6.1248, lng: 100.3678 },
-    timestamp: Date.now() - 16 * 24 * 60 * 60 * 1000,
+    timestamp: generateRecentTimestamp(),
     eventType: 'Flash Flood',
     waterDepth: '0.8m',
     reportCount: 44,
@@ -318,7 +321,7 @@ export const MALAYSIAN_FLOOD_HISTORY: HistoricalFloodRecord[] = [
     rainfall: 178,
     drainageBlockage: 73,
     center: { lat: 4.5975, lng: 101.0901 },
-    timestamp: Date.now() - 5 * 24 * 60 * 60 * 1000,
+    timestamp: generateRecentTimestamp(),
     eventType: 'Flash Flood',
     waterDepth: '0.7m',
     reportCount: 29,
@@ -335,7 +338,7 @@ export const MALAYSIAN_FLOOD_HISTORY: HistoricalFloodRecord[] = [
     rainfall: 234,
     drainageBlockage: 81,
     center: { lat: 5.9804, lng: 116.0735 },
-    timestamp: Date.now() - 4 * 24 * 60 * 60 * 1000,
+    timestamp: generateRecentTimestamp(),
     eventType: 'Coastal Flood',
     waterDepth: '1.0m',
     reportCount: 53,
@@ -350,7 +353,7 @@ export const MALAYSIAN_FLOOD_HISTORY: HistoricalFloodRecord[] = [
     rainfall: 189,
     drainageBlockage: 76,
     center: { lat: 5.8456, lng: 118.1177 },
-    timestamp: Date.now() - 22 * 24 * 60 * 60 * 1000,
+    timestamp: generateRecentTimestamp(),
     eventType: 'Flash Flood',
     waterDepth: '0.8m',
     reportCount: 31,
@@ -367,7 +370,7 @@ export const MALAYSIAN_FLOOD_HISTORY: HistoricalFloodRecord[] = [
     rainfall: 256,
     drainageBlockage: 79,
     center: { lat: 1.5535, lng: 110.3593 },
-    timestamp: Date.now() - 6 * 24 * 60 * 60 * 1000,
+    timestamp: generateRecentTimestamp(),
     eventType: 'River Overflow',
     waterDepth: '1.2m',
     reportCount: 61,
@@ -384,7 +387,7 @@ export const MALAYSIAN_FLOOD_HISTORY: HistoricalFloodRecord[] = [
     rainfall: 143,
     drainageBlockage: 67,
     center: { lat: 2.7297, lng: 101.9381 },
-    timestamp: Date.now() - 13 * 24 * 60 * 60 * 1000,
+    timestamp: generateRecentTimestamp(),
     eventType: 'Flash Flood',
     waterDepth: '0.5m',
     reportCount: 17,
@@ -401,7 +404,7 @@ export const MALAYSIAN_FLOOD_HISTORY: HistoricalFloodRecord[] = [
     rainfall: 138,
     drainageBlockage: 71,
     center: { lat: 2.1896, lng: 102.2501 },
-    timestamp: Date.now() - 19 * 24 * 60 * 60 * 1000,
+    timestamp: generateRecentTimestamp(),
     eventType: 'Flash Flood',
     waterDepth: '0.5m',
     reportCount: 14,
@@ -418,7 +421,7 @@ export const MALAYSIAN_FLOOD_HISTORY: HistoricalFloodRecord[] = [
     rainfall: 121,
     drainageBlockage: 58,
     center: { lat: 2.9264, lng: 101.6964 },
-    timestamp: Date.now() - 25 * 24 * 60 * 60 * 1000,
+    timestamp: generateRecentTimestamp(),
     eventType: 'Flash Flood',
     waterDepth: '0.3m',
     reportCount: 9,
@@ -435,7 +438,7 @@ export const MALAYSIAN_FLOOD_HISTORY: HistoricalFloodRecord[] = [
     rainfall: 198,
     drainageBlockage: 74,
     center: { lat: 5.2767, lng: 115.2308 },
-    timestamp: Date.now() - 17 * 24 * 60 * 60 * 1000,
+    timestamp: generateRecentTimestamp(),
     eventType: 'Coastal Surge',
     waterDepth: '0.8m',
     reportCount: 22,
@@ -452,13 +455,18 @@ export const MALAYSIAN_FLOOD_HISTORY: HistoricalFloodRecord[] = [
     rainfall: 156,
     drainageBlockage: 69,
     center: { lat: 6.4449, lng: 100.1986 },
-    timestamp: Date.now() - 21 * 24 * 60 * 60 * 1000,
+    timestamp: generateRecentTimestamp(),
     eventType: 'Flash Flood',
     waterDepth: '0.5m',
     reportCount: 11,
     affectedResidents: 2100,
   },
 ];
+
+export const MALAYSIAN_FLOOD_HISTORY: HistoricalFloodRecord[] = BASE_MALAYSIAN_FLOOD_HISTORY.map((record) => ({
+  ...record,
+  timestamp: generateRecentTimestamp()
+}));
 
 // ─── Derived summary ────────────────────────────────────────────────────────
 export const HISTORICAL_SUMMARY = {

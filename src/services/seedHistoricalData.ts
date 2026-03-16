@@ -8,7 +8,7 @@ import { ref as dbRef, get, set } from 'firebase/database';
 import { rtdb } from '../firebase';
 import { MALAYSIAN_FLOOD_HISTORY } from '../data/historicalFloodData';
 
-const SEED_KEY = 'historicalDataSeeded_v3';
+const SEED_KEY = 'historicalDataSeeded_v4';
 const MISSION_SEED_KEY = 'missionLogsSeededV3';
 
 // ─── Flood Data Seeder ──────────────────────────────────────────────────────

@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { saveFloodZone } from '../services/dataCollection';
-import { ref, onValue } from 'firebase/database';
+import { ref, onValue, remove, get } from 'firebase/database';
 import { rtdb } from '../firebase';
 
 export interface FloodZone {
@@ -37,7 +37,133 @@ export interface FloodZone {
   terrain?: { type: string; label: string };
   historical?: { frequency: string; status: string };
   notifiedDepts?: string[];
+  status?: 'active' | 'resolved';
 }
+
+const HOURS_BY_SEVERITY = {
+  critical: 18,
+  moderate: 10,
+  low: 4
+} as const;
+
+const parseDateSafely = (value?: string): Date | null => {
+  if (!value) return null;
+  if (value === 'N/A' || value === 'Unknown') return null;
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+};
+
+const resolveColorBySeverity = (severity: number): FloodZone['color'] => {
+  if (severity >= 8) return 'red';
+  if (severity >= 4) return 'orange';
+  return 'green';
+};
+
+const estimateFloodEndTime = (severity: number, startReference: Date): Date => {
+  const hours =
+    severity >= 8
+      ? HOURS_BY_SEVERITY.critical
+      : severity >= 4
+      ? HOURS_BY_SEVERITY.moderate
+      : HOURS_BY_SEVERITY.low;
+
+  return new Date(startReference.getTime() + hours * 60 * 60 * 1000);
+};
+
+const normalizeFloodLifecycle = (zone: FloodZone): FloodZone => {
+  const now = new Date();
+  const safeSeverity = Number.isFinite(zone.severity) ? Math.max(0, Math.min(10, zone.severity)) : 0;
+  const lastUpdatedDate = parseDateSafely(zone.lastUpdated) ?? now;
+  const startDate = parseDateSafely(zone.estimatedStartTime) ?? lastUpdatedDate;
+  const suppliedEndDate = parseDateSafely(zone.estimatedEndTime);
+
+  const computedEndDate = safeSeverity >= 4
+    ? suppliedEndDate ?? estimateFloodEndTime(safeSeverity, startDate)
+    : suppliedEndDate;
+
+  const hasExpired = !!computedEndDate && computedEndDate.getTime() <= now.getTime();
+
+  if (hasExpired && safeSeverity >= 4) {
+    return {
+      ...zone,
+      severity: 0,
+      color: 'green',
+      status: 'resolved',
+      forecast: 'Flood event estimated to have ended. Monitoring for new reports.',
+      lastUpdated: now.toISOString(),
+      estimatedStartTime: startDate.toISOString(),
+      estimatedEndTime: computedEndDate.toISOString(),
+      eventType: zone.eventType || 'Flood Event'
+    };
+  }
+
+  return {
+    ...zone,
+    severity: safeSeverity,
+    color: resolveColorBySeverity(safeSeverity),
+    status: safeSeverity >= 4 ? 'active' : (zone.status === 'resolved' ? 'resolved' : 'active'),
+    estimatedStartTime: safeSeverity >= 4 ? startDate.toISOString() : zone.estimatedStartTime,
+    estimatedEndTime: safeSeverity >= 4 && computedEndDate ? computedEndDate.toISOString() : zone.estimatedEndTime
+  };
+};
+
+const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+const canonicalTownName = (value: string, state: string): string => {
+  const normalized = (value || '')
+    .replace(/\s*\(.*?\)\s*/g, ' ')
+    .replace(/[,:/\-]+/g, ' ')
+    .toLowerCase()
+    .replace(new RegExp(`\\b${escapeRegExp(state.toLowerCase())}\\b`, 'g'), ' ')
+    .replace(/\b(malaysia|bandar|daerah|pekan|mukim|kampung|kg|jalan|jln|taman|seri|sri|bukit|kota|pusat|kawasan|felda|lembah|padang|simpang|kuala|ayer|air|kebun|lorong|besar|utara|selatan|timur|barat|live|weather|state|overview)\b/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  if (normalized) {
+    return normalized;
+  }
+
+  return (value || '')
+    .replace(/\s*\(.*?\)\s*/g, ' ')
+    .replace(/[,:/\-]+/g, ' ')
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .trim();
+};
+
+const canonicalTokenSet = (value: string): Set<string> => {
+  return new Set(
+    value
+      .split(' ')
+      .map((token) => token.trim())
+      .filter((token) => token.length >= 3)
+  );
+};
+
+const areEquivalentTownNames = (left: string, right: string): boolean => {
+  if (!left || !right) return false;
+  if (left === right) return true;
+
+  const minLengthForContainment = 4;
+  if (
+    (left.length >= minLengthForContainment && right.includes(left)) ||
+    (right.length >= minLengthForContainment && left.includes(right))
+  ) {
+    return true;
+  }
+
+  const leftTokens = canonicalTokenSet(left);
+  const rightTokens = canonicalTokenSet(right);
+  if (leftTokens.size === 0 || rightTokens.size === 0) return false;
+
+  let overlap = 0;
+  leftTokens.forEach((token) => {
+    if (rightTokens.has(token)) overlap++;
+  });
+
+  const score = overlap / Math.max(leftTokens.size, rightTokens.size);
+  return score >= 0.6;
+};
 
 const generateOrganicShape = (lat: number, lng: number, radius: number, points: number = 12) => {
   const paths = [];
@@ -242,9 +368,39 @@ export const getFloodZones = (): Record<string, FloodZone> => {
   return floodZonesCache;
 };
 
+/**
+ * Remove all live_town_* zones for a given state from Firebase RTDB and local cache.
+ * Call this before writing new town zones from a refresh so stale high-severity entries
+ * don't persist and make states appear incorrectly red.
+ */
+export const clearStateLiveTownZones = async (state: string): Promise<void> => {
+  const stateSlug = state.toLowerCase().replace(/\s+/g, '_');
+  try {
+    const liveZonesRef = ref(rtdb, 'liveZones');
+    const snapshot = await get(liveZonesRef);
+    if (snapshot.exists()) {
+      const raw = snapshot.val() as Record<string, any>;
+      const toDelete = Object.keys(raw).filter(
+        (id) =>
+          (id.startsWith('live_town_') && id.endsWith(`_${stateSlug}`)) ||
+          id === `live_${stateSlug}`
+      );
+      await Promise.all(toDelete.map((id) => remove(ref(rtdb, `liveZones/${id}`))));
+      if (floodZonesCache) {
+        toDelete.forEach((id) => { delete floodZonesCache![id]; });
+      }
+      if (toDelete.length > 0) {
+        console.log(`[BILAHUJAN] Cleared ${toDelete.length} stale live_town zones for ${state}`);
+      }
+    }
+  } catch (err) {
+    console.warn('[BILAHUJAN] clearStateLiveTownZones failed (non-fatal):', err);
+  }
+};
+
 export const updateFloodZone = (id: string, updates: Partial<FloodZone>) => {
   if (floodZonesCache && floodZonesCache[id]) {
-    floodZonesCache[id] = { ...floodZonesCache[id], ...updates };
+    floodZonesCache[id] = normalizeFloodLifecycle({ ...floodZonesCache[id], ...updates });
     
     // Save to Firebase
     saveFloodZone(floodZonesCache[id]).catch(err => 
@@ -253,29 +409,36 @@ export const updateFloodZone = (id: string, updates: Partial<FloodZone>) => {
   }
 };
 
-export const addFloodZone = (zone: FloodZone) => {
+export const addFloodZone = (zone: FloodZone): string => {
   if (!floodZonesCache) {
     getFloodZones();
   }
 
   if (floodZonesCache) {
     // Find if a zone with the same ID or same name+state already exists
-    const normName = (n: string) => n.replace(/\s*\(.*?\)\s*/g, '').trim().toLowerCase();
+    const incomingNameKey = canonicalTownName(zone.name, zone.state);
+    const incomingSpecificKey = canonicalTownName(zone.specificLocation || zone.name, zone.state);
+
     const existingZoneId =
       floodZonesCache[zone.id]
         ? zone.id
         : Object.keys(floodZonesCache).find(id => {
             const existing = floodZonesCache![id];
+            const existingNameKey = canonicalTownName(existing.name, existing.state);
+            const existingSpecificKey = canonicalTownName(existing.specificLocation || existing.name, existing.state);
+
             return existing.state === zone.state &&
-              (normName(existing.name) === normName(zone.name) ||
-               normName(existing.specificLocation) === normName(zone.name));
+              (
+                (incomingNameKey && (areEquivalentTownNames(incomingNameKey, existingNameKey) || areEquivalentTownNames(incomingNameKey, existingSpecificKey))) ||
+                (incomingSpecificKey && (areEquivalentTownNames(incomingSpecificKey, existingNameKey) || areEquivalentTownNames(incomingSpecificKey, existingSpecificKey)))
+              );
           });
 
     if (existingZoneId) {
       const existing = floodZonesCache[existingZoneId];
       const isLiveWeatherZone = zone.id.startsWith('live_');
 
-      const updatedZone = {
+      const updatedZone = normalizeFloodLifecycle({
         ...existing,
         // Live weather refresh → replace severity (Google Weather is the source of truth for weather).
         // User uploads → take the higher value (cumulative community reports).
@@ -301,19 +464,24 @@ export const addFloodZone = (zone: FloodZone) => {
         notifiedDepts: zone.notifiedDepts
           ? Array.from(new Set([...(existing.notifiedDepts || []), ...zone.notifiedDepts]))
           : existing.notifiedDepts
-      };
+      });
       floodZonesCache[existingZoneId] = updatedZone;
       saveFloodZone(updatedZone).catch(err =>
         console.error('Error saving updated zone to Firebase:', err)
       );
+      window.dispatchEvent(new CustomEvent('floodZonesUpdated'));
+      return existingZoneId;
     } else {
-      floodZonesCache[zone.id] = zone;
-      saveFloodZone(zone).catch(err =>
+      const normalizedZone = normalizeFloodLifecycle(zone);
+      floodZonesCache[zone.id] = normalizedZone;
+      saveFloodZone(normalizedZone).catch(err =>
         console.error('Error saving new zone to Firebase:', err)
       );
+      window.dispatchEvent(new CustomEvent('floodZonesUpdated'));
+      return zone.id;
     }
-    window.dispatchEvent(new CustomEvent('floodZonesUpdated'));
   }
+  return zone.id;
 };
 
 export const useFloodZones = () => {
@@ -338,10 +506,10 @@ export const useFloodZones = () => {
           if ((zone as any).isHistorical || (zone as any).status === 'resolved') {
             continue;
           }
-          firebaseZones[id] = {
+          firebaseZones[id] = normalizeFloodLifecycle({
             ...zone,
             name: zone.name.replace(/\s*\(.*?\)\s*/g, '').trim() || zone.name
-          };
+          });
         }
         // Completely replace local cache with Firebase data
         floodZonesCache = firebaseZones;

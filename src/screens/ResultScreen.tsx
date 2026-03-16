@@ -355,44 +355,35 @@ export default function ResultScreen({ result, imageUri, location, onBack, onTab
         console.warn('Firestore write failed (non-fatal):', firestoreErr);
       }
 
-      if (onUploadAlert) {
-        const floodZone: FloodZone = createZone(
-          generatedZoneId,
-          zoneData.name,
-          zoneData.specificLocation,
-          zoneData.state,
-          zoneData.region,
-          zoneData.center.lat,
-          zoneData.center.lng,
-          zoneData.severity,
-          zoneData.forecast,
-          0.02,
-          ['Citizen Scan', 'Gemini AI']
-        );
-        floodZone.aiConfidence = zoneData.aiConfidence;
-        floodZone.aiAnalysisText = zoneData.aiAnalysisText;
-        floodZone.estimatedStartTime = zoneData.estimatedStartTime;
-        floodZone.estimatedEndTime = zoneData.estimatedEndTime;
-        floodZone.eventType = zoneData.eventType;
-        onUploadAlert(generatedZoneId, floodZone);
-      }
+      const floodZone: FloodZone = createZone(
+        generatedZoneId,
+        zoneData.name,
+        zoneData.specificLocation,
+        zoneData.state,
+        zoneData.region,
+        zoneData.center.lat,
+        zoneData.center.lng,
+        zoneData.severity,
+        zoneData.forecast,
+        0.02,
+        ['Citizen Scan', 'Gemini AI']
+      );
+      floodZone.aiConfidence = zoneData.aiConfidence;
+      floodZone.aiAnalysisText = zoneData.aiAnalysisText;
+      floodZone.estimatedStartTime = zoneData.estimatedStartTime;
+      floodZone.estimatedEndTime = zoneData.estimatedEndTime;
+      floodZone.eventType = zoneData.eventType;
 
-      window.dispatchEvent(new CustomEvent('floodAlert', {
-        detail: {
-          zoneId: generatedZoneId,
-          zone: {
-            id: generatedZoneId,
-            name: zoneData.name,
-            specificLocation: zoneData.specificLocation,
-            state: zoneData.state,
-            region: zoneData.region,
-            severity: zoneData.severity,
-            center: zoneData.center,
-            rainfall: zoneData.rainfall,
-            drainageBlockage: zoneData.drainageBlockage,
+      if (onUploadAlert) {
+        onUploadAlert(generatedZoneId, floodZone);
+      } else {
+        window.dispatchEvent(new CustomEvent('floodAlert', {
+          detail: {
+            zoneId: generatedZoneId,
+            zone: floodZone,
           }
-        }
-      }));
+        }));
+      }
 
       if (normalizedSeverity >= 7) {
         try {

@@ -1,9 +1,24 @@
+import { useMemo } from 'react';
+import { useLiveZones } from '../services/firebaseHooks';
+
 interface BottomNavProps {
   activeTab: 'map' | 'report' | 'alert' | 'dashboard';
   onTabChange: (tab: 'map' | 'report' | 'alert' | 'dashboard') => void;
 }
 
 export default function BottomNav({ activeTab, onTabChange }: BottomNavProps) {
+  const liveZones = useLiveZones();
+
+  // Count distinct states with an active flood alert (severity >= 4)
+  const activeAlertStateCount = useMemo(() => {
+    const states = new Set<string>();
+    Object.values(liveZones).forEach((zone: any) => {
+      if ((zone?.severity ?? 0) >= 4 && zone?.state && !zone?.isHistorical && zone?.status !== 'resolved') {
+        states.add((zone.state as string).toLowerCase());
+      }
+    });
+    return states.size;
+  }, [liveZones]);
   return (
     <nav className="absolute bottom-0 left-0 right-0 w-full bg-white/90 backdrop-blur-md border border-slate-200 border-b-0 rounded-t-3xl px-4 pt-3 pb-6 flex flex-col z-50 overflow-hidden">
       <div className="flex justify-between items-center w-full mb-2 gap-1">
@@ -29,8 +44,12 @@ export default function BottomNav({ activeTab, onTabChange }: BottomNavProps) {
         >
           <span className="material-icons-round text-[26px]">notifications</span>
           <span className="text-[10px] font-bold uppercase tracking-tighter">Alert</span>
-          {activeTab !== 'alert' && (
-            <div className="absolute top-0 right-1/4 w-2 h-2 bg-red-500 rounded-full border border-white"></div>
+          {activeAlertStateCount > 0 && activeTab !== 'alert' && (
+            <div className="absolute -top-1 right-[18%] min-w-[17px] h-[17px] bg-red-500 rounded-full border-2 border-white flex items-center justify-center animate-pulse">
+              <span className="text-[9px] font-black text-white leading-none">
+                {activeAlertStateCount > 9 ? '9+' : activeAlertStateCount}
+              </span>
+            </div>
           )}
         </button>
 

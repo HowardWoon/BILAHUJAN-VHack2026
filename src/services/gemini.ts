@@ -140,12 +140,6 @@ const WATER_CONTENT_KEYWORDS = [
   'submerged', 'overflow', 'overflowing'
 ];
 
-const DISALLOWED_PRIMARY_SUBJECT_KEYWORDS = [
-  'baby', 'child', 'kid', 'toddler', 'infant', 'toy', 'playground', 'play mat', 'indoor',
-  'living room', 'bedroom', 'classroom', 'selfie', 'portrait', 'face', 'person close-up',
-  'product', 'doll', 'cartoon', 'document', 'receipt', 'screenshot', 'food', 'pet'
-];
-
 const parseRiskScoreValue = (value: unknown): number => {
   if (typeof value === 'number' && Number.isFinite(value)) return value;
   if (typeof value === 'string') {
@@ -292,13 +286,10 @@ const hasAcceptedWaterContent = (classification: GuidelineClassificationResult |
     ACCEPTED_GUIDELINE_CATEGORIES.has(category)
   );
   const hasWaterKeyword = WATER_CONTENT_KEYWORDS.some(keyword => haystack.includes(keyword));
-  const hasDisallowedPrimarySubject = DISALLOWED_PRIMARY_SUBJECT_KEYWORDS.some(keyword => haystack.includes(keyword));
-
-  if (hasDisallowedPrimarySubject && !hasWaterKeyword) return false;
   if (classification.matchesGuideline && hasAcceptedCategory && hasWaterKeyword) return true;
   if (hasAcceptedCategory && hasWaterKeyword) return true;
 
-  return hasWaterKeyword && !hasDisallowedPrimarySubject;
+  return hasWaterKeyword;
 };
 
 const buildClassificationRejectionReason = (classification: GuidelineClassificationResult | null) => {
@@ -1516,19 +1507,30 @@ const STATE_TOWNS: Record<string, { town: string; lat: number; lng: number }[]> 
   'Labuan':           [{ town:'Bandar Labuan', lat:5.2767, lng:115.2417 },{ town:'Victoria', lat:5.3000, lng:115.2500 }],
 };
 
+const normalizeTownSeedState = (state: string): string => {
+  const normalized = (state || '').trim().toLowerCase();
+  if (normalized === 'pulau pinang') return 'Penang';
+  if (normalized === 'malacca') return 'Melaka';
+  return state;
+};
+
+export function getSeedTownsForState(state: string): { town: string; lat: number; lng: number }[] {
+  return [...(STATE_TOWNS[normalizeTownSeedState(state)] ?? [])];
+}
+
 export async function fetchStateTownsWithWeather(
   state: string,
   retries = 1
 ): Promise<TownWeatherResult[]> {
 
   if (!isKeyValid(GEMINI_API_KEY)) {
-    return buildFallbackTowns(state);
+    return await buildFallbackTowns(state);
   }
 
   try {
     const apiCall = ai.models.generateContent({
       model: 'gemini-2.0-flash',
-      contents: `Search Google Maps and Google Search for major towns in ${state}, Malaysia and their CURRENT weather and flood status today.\n\nYou MUST reply with ONLY a raw JSON array. No explanation, no markdown, no code fences. Start your reply with [ and end with ].\n\nExample format:\n[{"town":"Shah Alam","lat":3.073,"lng":101.518,"weatherCondition":"Heavy Rain","isRaining":true,"severity":7,"aiAnalysisText":"Flash flood risk near low-lying areas."},{"town":"Klang","lat":3.044,"lng":101.445,"weatherCondition":"Cloudy","isRaining":false,"severity":2,"aiAnalysisText":"Conditions normal, no flood risk."}]\n\nReturn up to 8 towns from ${state}, Malaysia with real GPS coordinates and real current weather data from search results.`,
+      contents: `Search Google Maps and Google Search for major towns in ${state}, Malaysia and their CURRENT weather and flood status today.\n\nYou MUST reply with ONLY a raw JSON array. No explanation, no markdown, no code fences. Start your reply with [ and end with ].\n\nIMPORTANT: Do NOT include "${state}" itself as a town. List actual distinct cities and towns within ${state}, not the state or country name.\n\nExample format:\n[{"town":"Shah Alam","lat":3.073,"lng":101.518,"weatherCondition":"Heavy Rain","isRaining":true,"severity":7,"aiAnalysisText":"Flash flood risk near low-lying areas."},{"town":"Klang","lat":3.044,"lng":101.445,"weatherCondition":"Cloudy","isRaining":false,"severity":2,"aiAnalysisText":"Conditions normal, no flood risk."}]\n\nReturn up to 8 distinct towns from ${state}, Malaysia with real GPS coordinates and real current weather data from search results.`,
       config: {
         tools: [{ googleSearch: {} }],
         temperature: 0.1,
@@ -1539,7 +1541,7 @@ export async function fetchStateTownsWithWeather(
     const response = await withTimeout(apiCall, 12000, null);
     if (!response) {
       console.warn(`[Towns] Timeout for ${state} — using fallback`);
-      return buildFallbackTowns(state);
+      return await buildFallbackTowns(state);
     }
 
     const raw = response.text?.trim() ?? '';
@@ -1562,6 +1564,7 @@ export async function fetchStateTownsWithWeather(
     const towns = JSON.parse(jsonStr) as TownWeatherResult[];
     const valid = towns.filter(
       t => t.town && typeof t.lat === 'number' && typeof t.lng === 'number' && typeof t.severity === 'number'
+        && t.town.toLowerCase().trim() !== state.toLowerCase().trim()
     );
 
     if (valid.length === 0) throw new Error('Parsed array had no valid town entries');
@@ -1574,7 +1577,7 @@ export async function fetchStateTownsWithWeather(
 
     if (status === 429 || msg.includes('RESOURCE_EXHAUSTED') || msg.includes('quota')) {
       console.warn(`[Towns] Rate limit for ${state} — using fallback towns`);
-      return buildFallbackTowns(state);
+      return await buildFallbackTowns(state);
     }
     if (retries > 0) {
       console.warn(`[Towns] Retrying ${state}...`);
@@ -1582,14 +1585,54 @@ export async function fetchStateTownsWithWeather(
       return fetchStateTownsWithWeather(state, retries - 1);
     }
     console.error(`[Towns] Failed for ${state}, using fallback:`, msg);
-    return buildFallbackTowns(state);
+    return await buildFallbackTowns(state);
   }
 }
 
-// Build fallback town list using hardcoded coords — no extra API calls (avoids quota spiral)
-function buildFallbackTowns(state: string): TownWeatherResult[] {
-  const known = STATE_TOWNS[state] ?? [];
-  return known.slice(0, 6).map(t => ({
+// Build fallback town list — tries model knowledge first (no search grounding = no quota),
+// then falls back to the hardcoded seed list only if that also fails.
+async function buildFallbackTowns(state: string): Promise<TownWeatherResult[]> {
+  try {
+    const response = await withTimeout(
+      ai.models.generateContent({
+        model: 'gemini-2.0-flash',
+        contents: `List the 8 most important cities and towns inside ${state}, Malaysia. Do NOT include "${state}" itself, do NOT include "Malaysia". Reply ONLY with a raw JSON array, no markdown. Fields required: town (string), lat (number), lng (number). Example: [{"town":"Ipoh","lat":4.597,"lng":101.090}]`,
+        config: { temperature: 0, maxOutputTokens: 600 }
+      }),
+      8000,
+      null
+    );
+
+    if (response) {
+      const raw = response.text?.trim() ?? '';
+      const s = raw.indexOf('[');
+      const e = raw.lastIndexOf(']');
+      if (s !== -1 && e > s) {
+        const parsed = JSON.parse(raw.slice(s, e + 1)) as { town: string; lat: number; lng: number }[];
+        const valid = parsed.filter(
+          t => t.town && typeof t.lat === 'number' && typeof t.lng === 'number'
+            && t.town.toLowerCase().trim() !== state.toLowerCase().trim()
+            && t.town.toLowerCase().trim() !== 'malaysia'
+        );
+        if (valid.length > 0) {
+          console.log(`[Towns] Fallback AI got ${valid.length} towns for ${state}`);
+          return valid.map(t => ({
+            ...t,
+            weatherCondition: 'Cloudy',
+            isRaining: false,
+            severity: 1,
+            aiAnalysisText: `No live data available for ${t.town}. Tap refresh for live data.`
+          }));
+        }
+      }
+    }
+  } catch {
+    // fall through to hardcoded seed
+  }
+
+  // Absolute last resort: hardcoded seed list
+  const known = getSeedTownsForState(state);
+  return known.slice(0, 8).map(t => ({
     ...t,
     weatherCondition: 'Cloudy',
     isRaining: false,

@@ -22,6 +22,27 @@ const haversineKm = (lat1: number, lng1: number, lat2: number, lng2: number) => 
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 };
 
+const getDisplayLocationName = (name: string, state?: string) => {
+  const raw = (name || '')
+    .replace(/\s*\(.*?\)\s*/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  const normalizedState = (state || '').replace(/\s+/g, ' ').trim();
+  const escapedState = normalizedState.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const withoutState = normalizedState
+    ? raw.replace(new RegExp(`(?:,\s*)?${escapedState}\b`, 'ig'), '').replace(/\s+/g, ' ').replace(/^,\s*|,\s*$/g, '').trim()
+    : raw;
+
+  const parts = withoutState
+    .split(',')
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .filter((part, index, all) => all.findIndex((candidate) => candidate.toLowerCase() === part.toLowerCase()) === index);
+
+  return parts.join(', ') || withoutState || raw || 'Unknown Location';
+};
+
 interface AlertDetailScreenProps {
   zoneId: string | null;
   onBack: () => void;
@@ -109,6 +130,7 @@ export default function AlertDetailScreen({ zoneId, onBack, onScanClick, onTabCh
   const riskLabel = isHighRisk ? 'HIGH RISK' : isMediumRisk ? 'MODERATE RISK' : 'LOW RISK';
   const riskColor = isHighRisk ? 'red' : isMediumRisk ? 'orange' : 'green';
   const riskText = isHighRisk ? 'AI predicts flood peak in 1.5 hours' : isMediumRisk ? 'AI predicts possible flooding during heavy rain' : 'AI predicts no immediate flood risk';
+  const displayLocationName = getDisplayLocationName(zone.specificLocation || zone.name || '', zone.state);
 
   // Generate a static map image URL based on the zone's center coordinates
   const mapImageUrl = `https://maps.googleapis.com/maps/api/staticmap?center=${zone.center.lat},${zone.center.lng}&zoom=14&size=600x300&maptype=roadmap&markers=color:${riskColor}%7Clabel:!%7C${zone.center.lat},${zone.center.lng}&key=${import.meta.env.VITE_GOOGLE_MAPS_API_KEY || ''}`;
@@ -136,7 +158,7 @@ export default function AlertDetailScreen({ zoneId, onBack, onScanClick, onTabCh
               {riskLabel}
             </span>
           </div>
-          <h2 className="text-4xl font-extrabold mb-2 tracking-tight">{zone.specificLocation}</h2>
+          <h2 className="text-4xl font-extrabold mb-2 tracking-tight">{displayLocationName}</h2>
           <div className="flex items-center gap-2 text-white/90 text-sm font-medium">
             <span className="material-symbols-outlined text-sm">smart_toy</span>
             <p>{riskText}</p>

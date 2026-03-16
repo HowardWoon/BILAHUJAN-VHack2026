@@ -1,6 +1,6 @@
-import { useState, useEffect } from 'react';
+import { useEffect, useState } from 'react';
+import { onValue, ref, set } from 'firebase/database';
 import { rtdb } from '../firebase';
-import { ref, onValue, set } from 'firebase/database';
 import { SensorNode, SwarmNetworkStats } from '../types/swarm';
 
 const statusOrder: Record<SensorNode['status'], number> = {
@@ -9,19 +9,42 @@ const statusOrder: Record<SensorNode['status'], number> = {
   offline: 2
 };
 
+const ACTIVE_NODE_WINDOW_MS = 60 * 60 * 1000;
+const IDLE_NODE_WINDOW_MS = 24 * 60 * 60 * 1000;
+
 function buildNode(reportId: string, data: any, index: number): SensorNode {
-  const timestamp = typeof data?.timestamp === 'number' ? data.timestamp : 0;
-  const ageMs = Date.now() - timestamp;
-  const status = ageMs < 300000 ? 'active' : ageMs < 600000 ? 'idle' : 'offline';
+  let reportTimestamp: number;
+
+  if (typeof data?.timestamp === 'number' && data.timestamp > 1_000_000_000_000) {
+    reportTimestamp = data.timestamp;
+  } else if (typeof data?.timestamp === 'number' && data.timestamp > 1_000_000_000) {
+    reportTimestamp = data.timestamp * 1000;
+  } else if (typeof data?.timestamp === 'string') {
+    const parsed = new Date(data.timestamp).getTime();
+    reportTimestamp = Number.isNaN(parsed) ? Date.now() : parsed;
+  } else {
+    reportTimestamp = Date.now();
+  }
+
+  const ageMs = Date.now() - reportTimestamp;
+  const status: 'active' | 'idle' | 'offline' =
+    ageMs < ACTIVE_NODE_WINDOW_MS ? 'active' : ageMs < IDLE_NODE_WINDOW_MS ? 'idle' : 'offline';
+
+  const severity =
+    typeof data?.analysisResult?.riskScore === 'number'
+      ? data.analysisResult.riskScore
+      : typeof data?.severity === 'number'
+      ? data.severity
+      : 0;
 
   return {
     nodeId: `NODE-${String(index + 1).padStart(3, '0')}`,
     reportId,
-    location: data?.location ?? { lat: 0, lng: 0, address: 'Unknown' },
-    lastSeen: new Date(timestamp).toISOString(),
-    reportCount: data?.reportCount ?? 1,
-    avgSeverity: data?.analysisResult?.riskScore ?? 0,
-    currentSeverity: data?.analysisResult?.riskScore ?? 0,
+    location: data?.location ?? { lat: 0, lng: 0, address: 'Unknown Location' },
+    lastSeen: new Date(reportTimestamp).toISOString(),
+    reportCount: typeof data?.reportCount === 'number' ? data.reportCount : 1,
+    avgSeverity: severity,
+    currentSeverity: severity,
     status,
     zoneId: data?.zoneId
   };
@@ -31,28 +54,33 @@ export function useLiveNodes(): SensorNode[] {
   const [nodes, setNodes] = useState<SensorNode[]>([]);
 
   useEffect(() => {
-    const unsub = onValue(
+    const unsubscribe = onValue(
       ref(rtdb, 'liveReports'),
-      (snap) => {
-        if (!snap.exists()) {
+      (snapshot) => {
+        if (!snapshot.exists()) {
           setNodes([]);
           return;
         }
 
-        const raw = snap.val() as Record<string, any>;
-        const built = Object.entries(raw)
-          .map(([id, data], index) => buildNode(id, data, index))
-          .sort((left, right) => statusOrder[left.status] - statusOrder[right.status]);
+        const rawReports = snapshot.val() as Record<string, any>;
+        const liveNodes = Object.entries(rawReports)
+          .map(([reportId, data], index) => buildNode(reportId, data, index))
+          .sort((left, right) => {
+            const byStatus = statusOrder[left.status] - statusOrder[right.status];
+            if (byStatus !== 0) {
+              return byStatus;
+            }
+            return right.currentSeverity - left.currentSeverity;
+          });
 
-        setNodes(built);
+        setNodes(liveNodes);
       },
       (error) => {
-        console.error('useLiveNodes listener error:', error);
         setNodes([]);
       }
     );
 
-    return () => unsub();
+    return () => unsubscribe();
   }, []);
 
   return nodes;
@@ -83,8 +111,6 @@ export async function syncNodesToFirebase(nodes: SensorNode[]): Promise<void> {
         ...node,
         syncedAt: new Date().toISOString()
       });
-    } catch (error) {
-      console.error('syncNodesToFirebase error:', error);
-    }
+    } catch {}
   }
 }
