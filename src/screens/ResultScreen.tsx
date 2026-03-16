@@ -2,7 +2,11 @@ import { useState, useEffect } from 'react';
 import StatusBar from '../components/StatusBar';
 import BottomNav from '../components/BottomNav';
 import { FloodAnalysisResult } from '../services/gemini';
-import { createZone, addFloodZone } from '../data/floodZones';
+import { createZone } from '../data/floodZones';
+import type { FloodZone } from '../data/floodZones';
+import { ref, set } from 'firebase/database';
+import { collection, addDoc, serverTimestamp } from 'firebase/firestore';
+import { rtdb, db } from '../firebase';
 
 // ── Metric helpers ──────────────────────────────────────────────
 const formatTime = (t: string): string => {
@@ -44,6 +48,115 @@ const parsePassability = (text: string) => [
 const parseHazards = (text: string): string[] =>
   text.split(/[,;]/).map(h => h.trim()).filter(Boolean);
 
+function normalizeMalaysianStateName(rawState: string): string {
+  const stateName = (rawState || '').trim();
+  if (!stateName) return 'Unknown';
+
+  if (stateName.includes('Kuala Lumpur')) return 'Kuala Lumpur';
+  if (stateName.includes('Labuan')) return 'Labuan';
+  if (stateName.includes('Putrajaya')) return 'Putrajaya';
+  if (stateName.includes('Penang') || stateName.includes('Pulau Pinang')) return 'Penang';
+  if (stateName.includes('Malacca') || stateName.includes('Melaka')) return 'Melaka';
+  if (stateName.includes('Johor')) return 'Johor';
+  if (stateName.includes('Kedah')) return 'Kedah';
+  if (stateName.includes('Kelantan')) return 'Kelantan';
+  if (stateName.includes('Negeri Sembilan')) return 'Negeri Sembilan';
+  if (stateName.includes('Pahang')) return 'Pahang';
+  if (stateName.includes('Perak')) return 'Perak';
+  if (stateName.includes('Perlis')) return 'Perlis';
+  if (stateName.includes('Sabah')) return 'Sabah';
+  if (stateName.includes('Sarawak')) return 'Sarawak';
+  if (stateName.includes('Selangor')) return 'Selangor';
+  if (stateName.includes('Terengganu')) return 'Terengganu';
+
+  return 'Unknown';
+}
+
+function extractStateFromAddress(address: string): string {
+  const states = [
+    'Johor', 'Kedah', 'Kelantan', 'Melaka', 'Negeri Sembilan',
+    'Pahang', 'Perak', 'Perlis', 'Penang', 'Pulau Pinang',
+    'Sabah', 'Sarawak', 'Selangor', 'Terengganu',
+    'Kuala Lumpur', 'Labuan', 'Putrajaya'
+  ];
+
+  const lowered = (address || '').toLowerCase();
+  for (const state of states) {
+    if (lowered.includes(state.toLowerCase())) {
+      return state === 'Pulau Pinang' ? 'Penang' : state;
+    }
+  }
+
+  return 'Unknown';
+}
+
+function extractRegionFromState(state: string): string {
+  const regions: Record<string, string> = {
+    Johor: 'Southern Region',
+    Melaka: 'Southern Region',
+    'Negeri Sembilan': 'Central Region',
+    Selangor: 'Central Region',
+    'Kuala Lumpur': 'Central Region',
+    Putrajaya: 'Central Region',
+    Perak: 'Northern Region',
+    Penang: 'Northern Region',
+    Kedah: 'Northern Region',
+    Perlis: 'Northern Region',
+    Pahang: 'East Coast',
+    Terengganu: 'East Coast',
+    Kelantan: 'East Coast',
+    Sabah: 'East Malaysia',
+    Sarawak: 'East Malaysia',
+    Labuan: 'East Malaysia',
+  };
+  return regions[state] || 'Central Region';
+}
+
+function formatLocationLabel(locality: string, sublocality: string, state: string): string {
+  const normalize = (value: string) => (value || '').trim().toLowerCase();
+  const cleanLocality = (locality || '').trim();
+  const cleanSublocality = (sublocality || '').trim();
+  const cleanState = (state || '').trim();
+
+  let place = 'Reported Location';
+  if (cleanSublocality && cleanLocality) {
+    place = normalize(cleanSublocality) === normalize(cleanLocality)
+      ? cleanLocality
+      : `${cleanSublocality}, ${cleanLocality}`;
+  } else if (cleanLocality) {
+    place = cleanLocality;
+  } else if (cleanSublocality) {
+    place = cleanSublocality;
+  }
+
+  if (!cleanState || cleanState === 'Unknown' || cleanState === 'Unknown State') {
+    return place;
+  }
+
+  if (normalize(place).includes(normalize(cleanState))) {
+    return place;
+  }
+
+  return `${place}, ${cleanState}`;
+}
+
+function estimateRainfallFromSeverity(severity: number): number {
+  const map: Record<number, number> = {
+    1: 20, 2: 35, 3: 55, 4: 80, 5: 110,
+    6: 145, 7: 185, 8: 235, 9: 290, 10: 380
+  };
+  return map[severity] || 50;
+}
+
+function estimateDrainageFromSeverity(severity: number): number {
+  return Math.min(95, severity * 9 + Math.floor(Math.random() * 10));
+}
+
+function estimateAffectedResidents(severity: number): number {
+  const base = Math.max(1, severity) * 800;
+  return base + Math.floor(Math.random() * base * 0.3);
+}
+
 interface ResultScreenProps {
   result: FloodAnalysisResult;
   imageUri: string;
@@ -54,9 +167,10 @@ interface ResultScreenProps {
   onUploadAlert?: (zoneId: string, zone: import('../data/floodZones').FloodZone) => void;
 }
 
-export default function ResultScreen({ result, imageUri, location, onBack, onTabChange, onUploadAlert }: ResultScreenProps) {
-  const [isUploaded, setIsUploaded] = useState(false);
-  const [nearbyUsers, setNearbyUsers] = useState(0);
+export default function ResultScreen({ result, imageUri, location, onBack, onTabChange, zoneId, onUploadAlert }: ResultScreenProps) {
+  const [uploading, setUploading] = useState(false);
+  const [uploadSuccess, setUploadSuccess] = useState(false);
+  const [uploadError, setUploadError] = useState<string | null>(null);
   const [fullAddress, setFullAddress] = useState(location?.address || 'Unknown Location');
   const [detectedState, setDetectedState] = useState('Unknown State');
 
@@ -71,19 +185,15 @@ export default function ResultScreen({ result, imageUri, location, onBack, onTab
           const addressComponents = results[0].address_components;
           const stateComponent = addressComponents.find(c => c.types.includes('administrative_area_level_1'));
           
+          const normalizedState = normalizeMalaysianStateName(stateComponent?.long_name || '');
+
           // Find a good human readable name (locality, sublocality, or route)
           const locality = addressComponents.find(c => c.types.includes('locality'))?.long_name;
           const sublocality = addressComponents.find(c => c.types.includes('sublocality'))?.long_name;
           const route = addressComponents.find(c => c.types.includes('route'))?.long_name;
           
-          let readableName = 'Reported Location';
-          if (sublocality && locality) {
-            readableName = `${sublocality}, ${locality}`;
-          } else if (locality) {
-            readableName = locality;
-          } else if (route) {
-            readableName = route;
-          } else {
+          let readableName = formatLocationLabel(locality || route || '', sublocality || '', normalizedState);
+          if (!readableName || readableName === 'Reported Location') {
             readableName = results[0].formatted_address.split(',')[0];
           }
           
@@ -91,26 +201,7 @@ export default function ResultScreen({ result, imageUri, location, onBack, onTab
           setFullAddress(readableName);
 
           if (stateComponent) {
-            let stateName = stateComponent.long_name;
-            // Clean up common prefixes/suffixes to match our predefined states
-            if (stateName.includes('Kuala Lumpur')) stateName = 'Kuala Lumpur';
-            else if (stateName.includes('Labuan')) stateName = 'Labuan';
-            else if (stateName.includes('Putrajaya')) stateName = 'Putrajaya';
-            else if (stateName.includes('Penang') || stateName.includes('Pulau Pinang')) stateName = 'Penang';
-            else if (stateName.includes('Malacca') || stateName.includes('Melaka')) stateName = 'Melaka';
-            else if (stateName.includes('Johor')) stateName = 'Johor';
-            else if (stateName.includes('Kedah')) stateName = 'Kedah';
-            else if (stateName.includes('Kelantan')) stateName = 'Kelantan';
-            else if (stateName.includes('Negeri Sembilan')) stateName = 'Negeri Sembilan';
-            else if (stateName.includes('Pahang')) stateName = 'Pahang';
-            else if (stateName.includes('Perak')) stateName = 'Perak';
-            else if (stateName.includes('Perlis')) stateName = 'Perlis';
-            else if (stateName.includes('Sabah')) stateName = 'Sabah';
-            else if (stateName.includes('Sarawak')) stateName = 'Sarawak';
-            else if (stateName.includes('Selangor')) stateName = 'Selangor';
-            else if (stateName.includes('Terengganu')) stateName = 'Terengganu';
-            
-            setDetectedState(stateName);
+            setDetectedState(normalizedState);
           }
         }
       });
@@ -120,41 +211,213 @@ export default function ResultScreen({ result, imageUri, location, onBack, onTab
        for (const state of states) {
          if (location.address.toLowerCase().includes(state.toLowerCase())) {
            setDetectedState(state);
+           const firstSegment = (location.address.split(',')[0] || '').trim();
+           setFullAddress(formatLocationLabel(firstSegment, '', state));
            break;
          }
        }
     }
   }, [location]);
 
-  const handleUpload = () => {
-    if (location) {
-      const newZoneId = 'user_reported_' + Date.now();
-      
-      const newZone = createZone(
-        newZoneId,
-        fullAddress, // This is now the readable name
-        fullAddress, // This is now the readable name
-        detectedState !== 'Unknown State' ? detectedState : 'Kuala Lumpur', // Fallback to KL if unknown
-        'Unknown Region',
-        location.lat,
-        location.lng,
-        result.riskScore,
-        result.directive,
-        0.02,
-        ['User Reports', 'AI Analysis']
-      );
-      
-      newZone.estimatedStartTime = result.estimatedStartTime;
-      newZone.estimatedEndTime = result.estimatedEndTime;
-      newZone.eventType = result.eventType;
-      
-      addFloodZone(newZone);
+  const handleUploadToAlertZone = async () => {
+    if (uploading || uploadSuccess) return;
 
-      // Notify via direct callback — no window events
-      if (onUploadAlert) onUploadAlert(newZoneId, newZone);
+    if (!result || !location) {
+      setUploadError('Location is required. Please set your location first.');
+      return;
     }
-    setNearbyUsers(Math.floor(Math.random() * 2000) + 500); // Random number between 500 and 2500
-    setIsUploaded(true);
+
+    setUploading(true);
+    setUploadError(null);
+
+    try {
+      const timestamp = Date.now();
+      const generatedZoneId = zoneId || `user_reported_${timestamp}_${Math.random().toString(36).slice(2, 8)}`;
+
+      const resolveUploadState = async () => {
+        if (detectedState && detectedState !== 'Unknown State' && detectedState !== 'Unknown') {
+          return detectedState;
+        }
+
+        const fromAddress = extractStateFromAddress(location.address || fullAddress || '');
+        if (fromAddress !== 'Unknown') {
+          return fromAddress;
+        }
+
+        if (window.google && window.google.maps && window.google.maps.Geocoder) {
+          const geocoder = new window.google.maps.Geocoder();
+          const geocodeResult = await new Promise<string>((resolve) => {
+            geocoder.geocode({ location: { lat: location.lat, lng: location.lng } }, (results, status) => {
+              if (status === 'OK' && results && results[0]) {
+                const stateComponent = results[0].address_components.find(c => c.types.includes('administrative_area_level_1'));
+                resolve(normalizeMalaysianStateName(stateComponent?.long_name || ''));
+                return;
+              }
+              resolve('Unknown');
+            });
+          });
+
+          if (geocodeResult !== 'Unknown') {
+            setDetectedState(geocodeResult);
+            return geocodeResult;
+          }
+        }
+
+        return 'Unknown';
+      };
+
+      const derivedState = await resolveUploadState();
+      if (derivedState === 'Unknown') {
+        setUploadError('Unable to detect a specific state for this report. Please set a clearer location and try again.');
+        return;
+      }
+
+      const normalizedSeverity = Math.max(1, Math.min(10, Math.round(Number(result.riskScore) || 1)));
+      const region = extractRegionFromState(derivedState);
+
+      const zoneData = {
+        id: generatedZoneId,
+        name: fullAddress || location.address || 'Reported Flood Zone',
+        specificLocation: fullAddress || location.address || 'Reported Flood Zone',
+        state: derivedState || 'Kuala Lumpur',
+        region,
+        severity: normalizedSeverity,
+        rainfall: estimateRainfallFromSeverity(normalizedSeverity),
+        drainageBlockage: estimateDrainageFromSeverity(normalizedSeverity),
+        center: { lat: location.lat, lng: location.lng },
+        forecast: result.directive || 'Citizen flood report submitted.',
+        timestamp,
+        lastUpdated: new Date().toISOString(),
+        eventType: result.eventType || 'Flash Flood',
+        waterDepth: result.waterDepth || 'Unknown',
+        estimatedDepth: result.estimatedDepth || 'Unknown',
+        detectedHazards: result.detectedHazards || 'None',
+        passability: result.passability || 'Unknown',
+        humanRisk: result.humanRisk || 'Unknown',
+        directive: result.directive || '',
+        aiConfidence: result.aiConfidence || 0,
+        isUserReport: true,
+        source: 'citizen_scan',
+        reportedAt: new Date().toISOString(),
+        status: normalizedSeverity >= 7 ? 'active' : normalizedSeverity >= 4 ? 'warning' : 'monitor',
+        affectedResidents: estimateAffectedResidents(normalizedSeverity),
+        aiAnalysisText: result.directive || 'Citizen report received for monitoring.',
+        aiAnalysis: {
+          waterDepth: result.waterDepth || result.estimatedDepth || 'Unknown',
+          currentSpeed: normalizedSeverity >= 7 ? 'rapid current' : normalizedSeverity >= 4 ? 'moderate current' : 'still water',
+          riskLevel: normalizedSeverity >= 7 ? 'High' : normalizedSeverity >= 4 ? 'Moderate' : 'Low',
+          historicalContext: 'Citizen-submitted event pending trend aggregation.'
+        },
+        aiRecommendation: {
+          impassableRoads: result.passability || 'Unknown',
+          evacuationRoute: result.directive || 'Follow local authority advisories.',
+          evacuationCenter: `SMK ${derivedState}`
+        },
+        color: normalizedSeverity >= 8 ? 'red' : normalizedSeverity >= 4 ? 'orange' : 'yellow',
+        paths: [{ lat: location.lat, lng: location.lng }],
+        sources: ['Citizen Scan', 'Gemini AI'],
+        estimatedStartTime: result.estimatedStartTime || 'Unknown',
+        estimatedEndTime: result.estimatedEndTime || 'Unknown',
+      };
+
+      await set(ref(rtdb, `liveZones/${generatedZoneId}`), zoneData);
+
+      const reportData = {
+        id: generatedZoneId,
+        location: {
+          lat: location.lat,
+          lng: location.lng,
+          address: location.address || fullAddress || 'Unknown Location'
+        },
+        analysisResult: result,
+        timestamp,
+        severity: normalizedSeverity,
+        status: 'completed',
+        zoneId: generatedZoneId,
+        reportCount: 1
+      };
+
+      await set(ref(rtdb, `liveReports/${generatedZoneId}`), reportData);
+
+      try {
+        await addDoc(collection(db, 'reports'), {
+          ...reportData,
+          timestamp: serverTimestamp(),
+          createdAt: new Date().toISOString()
+        });
+
+        await addDoc(collection(db, 'floodZones'), {
+          ...zoneData,
+          timestamp: serverTimestamp(),
+          createdAt: new Date().toISOString()
+        });
+      } catch (firestoreErr) {
+        console.warn('Firestore write failed (non-fatal):', firestoreErr);
+      }
+
+      if (onUploadAlert) {
+        const floodZone: FloodZone = createZone(
+          generatedZoneId,
+          zoneData.name,
+          zoneData.specificLocation,
+          zoneData.state,
+          zoneData.region,
+          zoneData.center.lat,
+          zoneData.center.lng,
+          zoneData.severity,
+          zoneData.forecast,
+          0.02,
+          ['Citizen Scan', 'Gemini AI']
+        );
+        floodZone.aiConfidence = zoneData.aiConfidence;
+        floodZone.aiAnalysisText = zoneData.aiAnalysisText;
+        floodZone.estimatedStartTime = zoneData.estimatedStartTime;
+        floodZone.estimatedEndTime = zoneData.estimatedEndTime;
+        floodZone.eventType = zoneData.eventType;
+        onUploadAlert(generatedZoneId, floodZone);
+      }
+
+      window.dispatchEvent(new CustomEvent('floodAlert', {
+        detail: {
+          zoneId: generatedZoneId,
+          zone: {
+            id: generatedZoneId,
+            name: zoneData.name,
+            specificLocation: zoneData.specificLocation,
+            state: zoneData.state,
+            region: zoneData.region,
+            severity: zoneData.severity,
+            center: zoneData.center,
+            rainfall: zoneData.rainfall,
+            drainageBlockage: zoneData.drainageBlockage,
+          }
+        }
+      }));
+
+      if (normalizedSeverity >= 7) {
+        try {
+          const { autoAssessNewZone } = await import('../services/commandAgent');
+          autoAssessNewZone(generatedZoneId, normalizedSeverity, zoneData.name)
+            .catch((e: unknown) => console.warn('Auto-mission failed:', e));
+        } catch (e) {
+          console.warn('Command agent import failed:', e);
+        }
+      }
+
+      setUploadSuccess(true);
+      console.log('✅ Upload to Alert Zone successful:', generatedZoneId);
+    } catch (error: any) {
+      console.error('Upload to Alert Zone error:', error);
+      setUploadError(
+        error?.message?.includes('permission')
+          ? 'Firebase permission denied. Check database rules.'
+          : error?.message?.includes('network')
+          ? 'Network error. Check your internet connection.'
+          : 'Upload failed. Please try again.'
+      );
+    } finally {
+      setUploading(false);
+    }
   };
 
   // --- Rejection screen for irrelevant images ---
@@ -215,19 +478,48 @@ export default function ResultScreen({ result, imageUri, location, onBack, onTab
             <p className="text-sm font-medium truncate">{fullAddress}</p>
           </div>
 
-          {!isUploaded ? (
-            <button 
-              onClick={handleUpload}
-              className="w-full bg-[#5E56B1] hover:bg-[#4A4494] text-white p-4 rounded-xl flex items-center justify-center gap-2 font-bold shadow-md transition-all active:scale-95"
-            >
-              <span className="material-icons-round">cloud_upload</span>
-              Upload to Alert Zone
-            </button>
-          ) : (
-            <div className="bg-emerald-50 border border-emerald-100 p-4 rounded-xl flex items-start gap-3 animate-fade-in">
-              <span className="material-icons-round text-emerald-500 mt-0.5">notifications_active</span>
-              <p className="text-emerald-700 text-sm font-medium">
-                Your report is live. <span className="font-bold">{nearbyUsers} nearby users</span> have been alerted.
+          <button
+            onClick={handleUploadToAlertZone}
+            disabled={uploading || uploadSuccess}
+            className={`w-full py-4 rounded-2xl font-bold flex items-center justify-center gap-2 transition-all active:scale-95 shadow-lg ${
+              uploadSuccess
+                ? 'bg-green-500 text-white cursor-default'
+                : uploading
+                ? 'bg-purple-400 text-white cursor-not-allowed opacity-75'
+                : 'bg-[#6B59D3] hover:bg-[#5a48c2] text-white'
+            }`}
+          >
+            {uploadSuccess ? (
+              <>
+                <span className="material-icons-round">check_circle</span>
+                Alert Zone Updated!
+              </>
+            ) : uploading ? (
+              <>
+                <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                Uploading...
+              </>
+            ) : (
+              <>
+                <span className="material-icons-round">cloud_upload</span>
+                Upload to Alert Zone
+              </>
+            )}
+          </button>
+
+          {uploadError && !uploadSuccess && (
+            <div className="flex items-center gap-2 p-3 bg-red-50 border border-red-100 rounded-xl mt-2">
+              <span className="material-icons-round text-red-500 text-sm">error</span>
+              <p className="text-red-600 text-xs">{uploadError}</p>
+            </div>
+          )}
+
+          {uploadSuccess && (
+            <div className="flex items-center gap-2 p-3 bg-green-50 border border-green-100 rounded-xl mt-2">
+              <span className="material-icons-round text-green-500 text-sm">check_circle</span>
+              <p className="text-green-700 text-xs font-medium">
+                Report saved to Firebase. Alert zones and dashboard updated in real time.
+                {(Math.max(1, Math.min(10, Math.round(Number(result.riskScore) || 1))) >= 7) && ' 🚨 Authorities have been notified.'}
               </p>
             </div>
           )}
@@ -236,7 +528,8 @@ export default function ResultScreen({ result, imageUri, location, onBack, onTab
         <div className="px-6 mb-6">
           {/* Severity Banner */}
           {(() => {
-            const score = result.riskScore;
+            const numericScore = Math.max(0, Math.min(10, Math.round(Number(result.riskScore) || 0)));
+            const score = result.isRelevant ? Math.max(1, numericScore) : numericScore;
             let bgGradient = 'from-green-500 to-emerald-600';
             let textLabel = 'NORMAL';
             let icon = 'check_circle';

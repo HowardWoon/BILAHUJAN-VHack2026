@@ -131,11 +131,11 @@ const MissionLogPanel = memo(function MissionLogPanel({ className }: MissionLogP
           key={log.missionId}
           className="p-3 bg-[#161B22] rounded-lg border border-gray-700 hover:border-gray-500 transition-all cursor-pointer"
           onClick={() => {
-            setCurrentSteps(log.steps);
-            setCurrentSummary(log.summary);
+            setCurrentSteps(Array.isArray(log.steps) ? log.steps : []);
+            setCurrentSummary(log.summary ?? '');
             setCurrentStatus(log.status);
-            setZonesActioned(log.zonesActioned);
-            setAlertsDispatched(log.alertsDispatched);
+            setZonesActioned(log.zonesActioned ?? 0);
+            setAlertsDispatched(log.alertsDispatched ?? 0);
           }}
         >
           <div className="flex items-center justify-between mb-1">
@@ -152,7 +152,7 @@ const MissionLogPanel = memo(function MissionLogPanel({ className }: MissionLogP
               {log.status}
             </span>
           </div>
-          <div className="text-gray-500 text-xs truncate mb-1">{log.goal.slice(0, 80)}...</div>
+          <div className="text-gray-500 text-xs truncate mb-1">{(log.goal ?? log.summary ?? 'Mission record').slice(0, 80)}...</div>
           <div className="flex gap-4">
             <span className="text-blue-400 text-xs">{log.zonesActioned} zones</span>
             <span className="text-orange-400 text-xs">{log.alertsDispatched} alerts</span>
@@ -165,23 +165,25 @@ const MissionLogPanel = memo(function MissionLogPanel({ className }: MissionLogP
 
   return (
     <div className={`bg-[#0D1117] rounded-xl border border-gray-700 overflow-hidden ${className ?? ''}`}>
-      <div className="flex items-center justify-between px-4 py-3 bg-[#161B22] border-b border-gray-700">
-        <div className="flex items-center gap-2">
-          {isRunning ? (
-            <span className="w-2.5 h-2.5 rounded-full bg-green-500 animate-pulse" />
-          ) : (
-            <span className="w-2.5 h-2.5 rounded-full bg-gray-600" />
-          )}
-          <span className="font-mono text-sm font-bold text-white">⚡ BILAHUJAN Command Agent</span>
-          <span className="text-gray-600 font-mono text-xs">v2.0 · Swarm Intelligence</span>
+      <div className="px-4 py-3 bg-[#161B22] border-b border-gray-700 space-y-1.5">
+        {/* Row 1: name + status badge */}
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2 min-w-0">
+            {isRunning ? (
+              <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse flex-shrink-0" />
+            ) : (
+              <span className="w-2 h-2 rounded-full bg-gray-600 flex-shrink-0" />
+            )}
+            <span className="font-mono text-xs font-bold text-white truncate">⚡ BILAHUJAN Command Agent</span>
+          </div>
+          <span className={`flex-shrink-0 px-2 py-0.5 rounded text-[10px] font-bold whitespace-nowrap ${isRunning ? 'bg-green-900 text-green-300 animate-pulse' : 'bg-gray-800 text-gray-500'}`}>
+            {isRunning ? '● RUNNING' : '○ IDLE'}
+          </span>
         </div>
-        <div className="flex items-center gap-2">
-          <span className="text-gray-600 font-mono text-xs">{agentStatus.totalMissionsRun} missions run</span>
-          {isRunning ? (
-            <span className="px-2 py-0.5 rounded text-xs font-bold bg-green-900 text-green-300 animate-pulse">● RUNNING</span>
-          ) : (
-            <span className="px-2 py-0.5 rounded text-xs font-bold bg-gray-800 text-gray-500">○ IDLE</span>
-          )}
+        {/* Row 2: version + missions count */}
+        <div className="flex items-center gap-3 pl-4">
+          <span className="text-gray-600 font-mono text-[10px]">v2.0 · Swarm Intelligence</span>
+          <span className="text-gray-600 font-mono text-[10px]">{agentStatus.totalMissionsRun} missions run</span>
         </div>
       </div>
 

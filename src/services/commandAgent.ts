@@ -266,6 +266,26 @@ export async function runMission(
   return log;
 }
 
+export async function autoAssessNewZone(
+  zoneId: string,
+  severity: number,
+  location: string
+): Promise<void> {
+  if (severity < 5) return;
+
+  const goal = severity >= 9
+    ? `CRITICAL ALERT: New severity ${severity}/10 flood at ${location} (Zone ${zoneId}). This is a life-threatening situation. Immediately dispatch JPS, NADMA, and APM. Assess surrounding zones for cascade risk.`
+    : severity >= 7
+    ? `SEVERE FLOOD: New severity ${severity}/10 report at ${location}. Dispatch JPS and NADMA. Check adjacent zones for escalation.`
+    : `MODERATE FLOOD: New severity ${severity}/10 at ${location}. Monitor and prepare response if escalates.`;
+
+  try {
+    await runMission(goal);
+  } catch (e) {
+    console.warn('Auto-assessment failed:', e);
+  }
+}
+
 export async function getLastMission(): Promise<MissionLog | null> {
   try {
     const snap = await get(ref(rtdb, 'missionLogs'));

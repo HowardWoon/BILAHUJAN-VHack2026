@@ -26,7 +26,7 @@ import BottomNav from '../components/BottomNav';
 import StatusBar from '../components/StatusBar';
 import { PrivacyNotice } from '../components/PrivacyNotice';
 import { FloodZone, useFloodZones } from '../data/floodZones';
-import { analyzeAudio, AudioAnalysisResult } from '../services/gemini';
+import { analyzeAudio, AudioAnalysisResult, analyzeLocationRisk, LocationRiskAnalysis } from '../services/gemini';
 import { saveAudioAnalysis } from '../services/dataCollection';
 import { isMalaysianLocation, getMalaysiaLocationWarning } from '../utils/locationValidator';
 
@@ -36,12 +36,124 @@ interface MapScreenProps {
   initialShowLocationModal?: boolean;
 }
 
+interface ResolvedMapLocation {
+  lat: number;
+  lng: number;
+  address: string;
+}
+
+const normalizeSearchText = (value: string) => value.toLowerCase().replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
+const normalizeLabelPart = (value: string) => value.trim().toLowerCase().replace(/\s+/g, ' ');
+
+const isPlusCodeLike = (value: string) => /^[a-z0-9]{4,}\+[a-z0-9]{2,}(?:\s+.*)?$/i.test(value.trim());
+
+const getAddressComponent = (components: google.maps.GeocoderAddressComponent[], types: string[]) =>
+  components.find(component => types.some(type => component.types.includes(type)))?.long_name?.trim() || '';
+
+const buildSpecificCurrentLocationLabel = (result: google.maps.GeocoderResult) => {
+  const components = result.address_components || [];
+
+  const premise = getAddressComponent(components, ['premise', 'subpremise', 'establishment', 'point_of_interest']);
+  const neighborhood = getAddressComponent(components, ['neighborhood', 'sublocality_level_1', 'sublocality_level_2', 'sublocality']);
+  const route = getAddressComponent(components, ['route']);
+  const locality = getAddressComponent(components, ['locality']);
+  const subdistrict = getAddressComponent(components, ['administrative_area_level_3', 'administrative_area_level_4']);
+  const district = getAddressComponent(components, ['administrative_area_level_2']);
+  const state = getAddressComponent(components, ['administrative_area_level_1']);
+
+  const town = locality || subdistrict || district;
+  const micro = neighborhood || route || premise;
+
+  if (town && state && town.toLowerCase() !== state.toLowerCase()) {
+    if (micro && micro.toLowerCase() !== town.toLowerCase()) {
+      return `${micro}, ${town}`;
+    }
+    return `${town}, ${state}`;
+  }
+
+  const primary = micro || town;
+  const secondary = town || district || state;
+
+  if (primary && secondary && primary.toLowerCase() !== secondary.toLowerCase()) {
+    return `${primary}, ${secondary}`;
+  }
+
+  if (primary && state && primary.toLowerCase() !== state.toLowerCase()) return `${primary}, ${state}`;
+  if (primary && primary.toLowerCase() !== state.toLowerCase()) return primary;
+  if (secondary && secondary.toLowerCase() !== state.toLowerCase()) return secondary;
+
+  const fallbackParts = (result.formatted_address || '')
+    .split(',')
+    .map(part => part.trim())
+    .filter(part => part && !/^\d+$/.test(part) && !/malaysia/i.test(part) && !/^\d{5}$/.test(part) && !isPlusCodeLike(part))
+    .filter(part => part.toLowerCase() !== state.toLowerCase());
+
+  const fallbackLabel = fallbackParts.slice(0, 2).join(', ');
+  if (!fallbackLabel || isPlusCodeLike(fallbackLabel)) return 'My Location';
+  return fallbackLabel;
+};
+
+const predictionMatchesQuery = (query: string, prediction: google.maps.places.AutocompletePrediction) => {
+  const normalizedQuery = normalizeSearchText(query);
+  if (!normalizedQuery || normalizedQuery.length < 3) return false;
+
+  const mainText = normalizeSearchText(prediction.structured_formatting?.main_text || '');
+  const description = normalizeSearchText(prediction.description || '');
+
+  if (mainText === normalizedQuery || description === normalizedQuery) return true;
+  if (description.startsWith(`${normalizedQuery} `) || description.startsWith(`${normalizedQuery},`)) return true;
+
+  return false;
+};
+
 const MALAYSIA_BOUNDS = {
-  south: 1.0,
+  south: 0.8,
   west: 99.0,
-  north: 7.0,
+  north: 7.5,
   east: 120.0,
 };
+
+const LAST_PRECISE_LOCATION_KEY = 'bilahujan:lastPreciseLocation';
+const MAX_PRECISE_AGE_MS = 1000 * 60 * 30;
+
+const isWithinMalaysiaBounds = (lat: number, lng: number) =>
+  lat >= MALAYSIA_BOUNDS.south && lat <= MALAYSIA_BOUNDS.north && lng >= MALAYSIA_BOUNDS.west && lng <= MALAYSIA_BOUNDS.east;
+
+const readLastPreciseLocation = () => {
+  try {
+    const raw = localStorage.getItem(LAST_PRECISE_LOCATION_KEY);
+    if (!raw) return null;
+
+    const parsed = JSON.parse(raw) as { lat?: number; lng?: number; address?: string; timestamp?: number };
+    if (!Number.isFinite(parsed.lat) || !Number.isFinite(parsed.lng) || !Number.isFinite(parsed.timestamp)) {
+      return null;
+    }
+
+    if (!isWithinMalaysiaBounds(parsed.lat as number, parsed.lng as number)) return null;
+    if (Date.now() - (parsed.timestamp as number) > MAX_PRECISE_AGE_MS) return null;
+
+    return {
+      lat: parsed.lat as number,
+      lng: parsed.lng as number,
+      address: typeof parsed.address === 'string' ? parsed.address : '',
+    };
+  } catch {
+    return null;
+  }
+};
+
+const saveLastPreciseLocation = (lat: number, lng: number, address: string) => {
+  try {
+    localStorage.setItem(
+      LAST_PRECISE_LOCATION_KEY,
+      JSON.stringify({ lat, lng, address, timestamp: Date.now() })
+    );
+  } catch {
+    // ignore storage failures
+  }
+};
+
+const formatCoordinateAddress = (lat: number, lng: number) => `Coordinates ${lat.toFixed(5)}, ${lng.toFixed(5)}`;
 
 export default function MapScreen({ onScanClick, onTabChange, initialShowLocationModal = false }: MapScreenProps) {
   const [selectedZone, setSelectedZone] = useState<FloodZone | null>(null);
@@ -62,6 +174,17 @@ export default function MapScreen({ onScanClick, onTabChange, initialShowLocatio
   const audioChunksRef = useRef<Blob[]>([]);
   const [locationWarning, setLocationWarning] = useState<string>('');
   const [locationNotFound, setLocationNotFound] = useState(false);
+  const [isLoadingRisk, setIsLoadingRisk] = useState(false);
+  const autoSearchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const searchRequestIdRef = useRef(0);
+
+  useEffect(() => {
+    return () => {
+      if (autoSearchTimerRef.current) {
+        clearTimeout(autoSearchTimerRef.current);
+      }
+    };
+  }, []);
 
   const onMapLoad = useCallback((map: google.maps.Map) => {
     mapRef.current = map;
@@ -120,6 +243,203 @@ export default function MapScreen({ onScanClick, onTabChange, initialShowLocatio
   }, [allZones]);
 
   const [currentAddress, setCurrentAddress] = useState<string>('Use My Current Location');
+  const [currentGpsLocation, setCurrentGpsLocation] = useState<{ lat: number; lng: number } | null>(null);
+
+  const getCurrentPositionWithOptions = useCallback(
+    (options?: PositionOptions) =>
+      new Promise<GeolocationPosition>((resolve, reject) => {
+        navigator.geolocation.getCurrentPosition(resolve, reject, options);
+      }),
+    []
+  );
+
+  const getBestCurrentPosition = useCallback(async (): Promise<GeolocationPosition | null> => {
+    if (!navigator.geolocation) return null;
+
+    const isAcceptablePosition = (position: GeolocationPosition, maxAccuracyMeters: number) => {
+      const { latitude, longitude, accuracy } = position.coords;
+      if (!isWithinMalaysiaBounds(latitude, longitude)) return false;
+      if (Number.isFinite(accuracy) && accuracy > maxAccuracyMeters) return false;
+      return true;
+    };
+
+    const getBestFromWatch = () => new Promise<GeolocationPosition | null>((resolve) => {
+      let best: GeolocationPosition | null = null;
+      const startedAt = Date.now();
+      const maxWaitMs = 12000;
+
+      const finish = (value: GeolocationPosition | null) => {
+        navigator.geolocation.clearWatch(watchId);
+        resolve(value);
+      };
+
+      const watchId = navigator.geolocation.watchPosition(
+        (position) => {
+          if (!isAcceptablePosition(position, 3000)) {
+            if (Date.now() - startedAt >= maxWaitMs) {
+              finish(best);
+            }
+            return;
+          }
+
+          if (!best || position.coords.accuracy < best.coords.accuracy) {
+            best = position;
+          }
+
+          if (position.coords.accuracy <= 120) {
+            finish(position);
+            return;
+          }
+
+          if (Date.now() - startedAt >= maxWaitMs) {
+            finish(best);
+          }
+        },
+        () => finish(best),
+        {
+          enableHighAccuracy: true,
+          maximumAge: 0,
+          timeout: maxWaitMs,
+        }
+      );
+
+      setTimeout(() => finish(best), maxWaitMs + 500);
+    });
+
+    const watched = await getBestFromWatch();
+    if (watched) return watched;
+
+    try {
+      const position = await getCurrentPositionWithOptions({
+        enableHighAccuracy: true,
+        timeout: 15000,
+        maximumAge: 0,
+      });
+      if (isAcceptablePosition(position, 3000)) return position;
+    } catch {
+    }
+
+    try {
+      const fallbackPosition = await getCurrentPositionWithOptions({
+        enableHighAccuracy: false,
+        timeout: 12000,
+        maximumAge: 600000,
+      });
+      if (isAcceptablePosition(fallbackPosition, 10000)) return fallbackPosition;
+    } catch {
+      // continue to null
+    }
+
+    return null;
+  }, [getCurrentPositionWithOptions]);
+
+  const resolveCurrentLocationAddress = useCallback(async (lat: number, lng: number): Promise<string> => {
+    if (!(window.google && window.google.maps && window.google.maps.Geocoder)) {
+      return formatCoordinateAddress(lat, lng);
+    }
+
+    const geocoder = new window.google.maps.Geocoder();
+    const results = await new Promise<google.maps.GeocoderResult[]>((resolve) => {
+      geocoder.geocode({ location: { lat, lng } }, (results, status) => {
+        if (status === 'OK' && results && results.length > 0) {
+          resolve(results);
+          return;
+        }
+        resolve([]);
+      });
+    });
+
+    if (!results.length) return formatCoordinateAddress(lat, lng);
+
+    const firstReadableResult = results.find(result => {
+      const label = buildSpecificCurrentLocationLabel(result);
+      return label && label !== 'My Location' && !isPlusCodeLike(label);
+    }) || results[0];
+
+    const displayName = buildSpecificCurrentLocationLabel(firstReadableResult);
+    if (!displayName || displayName === 'My Location' || isPlusCodeLike(displayName)) {
+      return formatCoordinateAddress(lat, lng);
+    }
+
+    return displayName;
+  }, []);
+
+  const resolveApproximateLocation = useCallback(async (): Promise<{ lat: number; lng: number; label: string } | null> => {
+    const endpoints = [
+      'https://ipapi.co/json/',
+      'https://ipwho.is/',
+      'https://ipinfo.io/json',
+    ];
+
+    for (const endpoint of endpoints) {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 5000);
+
+      try {
+        const response = await fetch(endpoint, { signal: controller.signal });
+        if (!response.ok) continue;
+
+        const data = await response.json() as {
+          latitude?: number;
+          longitude?: number;
+          lat?: number;
+          lon?: number;
+          city?: string;
+          region?: string;
+          country?: string;
+          country_name?: string;
+          country_code?: string;
+          loc?: string;
+        };
+
+        let lat = Number.NaN;
+        let lng = Number.NaN;
+
+        if (Number.isFinite(data.latitude) && Number.isFinite(data.longitude)) {
+          lat = data.latitude as number;
+          lng = data.longitude as number;
+        } else if (Number.isFinite(data.lat) && Number.isFinite(data.lon)) {
+          lat = data.lat as number;
+          lng = data.lon as number;
+        } else if (typeof data.loc === 'string' && data.loc.includes(',')) {
+          const [latStr, lngStr] = data.loc.split(',');
+          lat = Number(latStr);
+          lng = Number(lngStr);
+        }
+
+        const countryText = `${data.country || ''} ${data.country_name || ''} ${data.country_code || ''}`.toLowerCase();
+        const isMalaysiaCountry = /malaysia|\bmy\b/.test(countryText);
+
+        if (!Number.isFinite(lat) || !Number.isFinite(lng)) continue;
+        if (!isWithinMalaysiaBounds(lat, lng)) continue;
+        if (!isMalaysiaCountry) continue;
+
+        const city = (data.city || '').trim();
+        const region = (data.region || '').trim();
+
+        const uniqueParts: string[] = [];
+        const seen = new Set<string>();
+        [city, region].forEach(part => {
+          const trimmed = part.trim();
+          if (!trimmed) return;
+          const key = normalizeLabelPart(trimmed);
+          if (seen.has(key)) return;
+          seen.add(key);
+          uniqueParts.push(trimmed);
+        });
+
+        const label = uniqueParts.join(', ') || 'Malaysia';
+
+        return { lat, lng, label };
+      } catch {
+        // try next endpoint
+      } finally {
+        clearTimeout(timer);
+      }
+    }
+
+    return null;
+  }, []);
 
   useEffect(() => {
     if (initialShowLocationModal) {
@@ -129,51 +449,77 @@ export default function MapScreen({ onScanClick, onTabChange, initialShowLocatio
 
   // Try to get current location address when modal opens
   useEffect(() => {
-    if (scanMode === 'modal') {
-      setCurrentAddress('Fetching location...');
-      
-      if (navigator.geolocation && window.google && window.google.maps && window.google.maps.Geocoder) {
-        navigator.geolocation.getCurrentPosition((pos) => {
-          const geocoder = new window.google.maps.Geocoder();
-          const latlng = { lat: pos.coords.latitude, lng: pos.coords.longitude };
-          geocoder.geocode({ location: latlng }, (results, status) => {
-            if (status === 'OK' && results && results[0]) {
-              // Try to get a specific locality or sublocality
-              const addressComponents = results[0].address_components;
-              const sublocality = addressComponents.find(c => c.types.includes('sublocality_level_1') || c.types.includes('sublocality'))?.long_name;
-              const locality = addressComponents.find(c => c.types.includes('locality'))?.long_name;
-              const district = addressComponents.find(c => c.types.includes('administrative_area_level_2'))?.long_name;
-              const state = addressComponents.find(c => c.types.includes('administrative_area_level_1'))?.long_name;
-              
-              let displayName: string;
-              if (sublocality && locality) {
-                displayName = `${sublocality}, ${locality}`;
-              } else if (locality) {
-                displayName = locality;
-              } else if (district) {
-                displayName = district;
-              } else if (state) {
-                displayName = state;
-              } else {
-                // Skip leading number tokens (e.g. street numbers) to get a meaningful name
-                const parts = results[0].formatted_address.split(',');
-                const meaningful = parts.find(p => isNaN(Number(p.trim())));
-                displayName = meaningful ? meaningful.trim() : 'My Location';
-              }
-              setCurrentAddress(`Current: ${displayName}`);
-            } else {
-              setCurrentAddress('Current: Kuala Lumpur (Default)');
-            }
-          });
-        }, () => {
-          // Fallback if geolocation fails (common in preview iframes)
-          setCurrentAddress('Current: Kuala Lumpur (Default)');
-        }, { timeout: 5000 });
-      } else {
-        setCurrentAddress('Current: Kuala Lumpur (Default)');
-      }
+    if (scanMode !== 'modal') return;
+
+    setCurrentAddress('Fetching location...');
+
+    if (!isLoaded || !(window.google && window.google.maps && window.google.maps.Geocoder)) {
+      return;
     }
-  }, [scanMode]);
+
+    let cancelled = false;
+
+    const hydrateCurrentAddress = async () => {
+      const position = await getBestCurrentPosition();
+
+      if (cancelled) return;
+
+      if (position) {
+        const lat = position.coords.latitude;
+        const lng = position.coords.longitude;
+        setCurrentGpsLocation({ lat, lng });
+        const displayName = await resolveCurrentLocationAddress(lat, lng);
+        if (cancelled) return;
+        saveLastPreciseLocation(lat, lng, displayName);
+        setCurrentAddress(`Current: ${displayName}`);
+        return;
+      }
+
+      try {
+        const coarse = await getCurrentPositionWithOptions({
+          enableHighAccuracy: false,
+          timeout: 12000,
+          maximumAge: 600000,
+        });
+
+        if (isWithinMalaysiaBounds(coarse.coords.latitude, coarse.coords.longitude)) {
+          const coarseLocation = { lat: coarse.coords.latitude, lng: coarse.coords.longitude };
+          setCurrentGpsLocation(coarseLocation);
+          const coarseLabel = await resolveCurrentLocationAddress(coarseLocation.lat, coarseLocation.lng);
+          if (cancelled) return;
+          setCurrentAddress(`Current: ${coarseLabel}`);
+          return;
+        }
+      } catch {
+        // continue to short-lived precise cache fallback
+      }
+
+      const lastPrecise = readLastPreciseLocation();
+      if (lastPrecise) {
+        setCurrentGpsLocation({ lat: lastPrecise.lat, lng: lastPrecise.lng });
+        setCurrentAddress(`Current: ${lastPrecise.address || formatCoordinateAddress(lastPrecise.lat, lastPrecise.lng)}`);
+        return;
+      }
+
+      const approximate = await resolveApproximateLocation();
+      if (cancelled) return;
+
+      if (approximate) {
+        setCurrentGpsLocation({ lat: approximate.lat, lng: approximate.lng });
+        setCurrentAddress(`Current: ${approximate.label}`);
+        return;
+      }
+
+      setCurrentGpsLocation(null);
+      setCurrentAddress('Current: GPS unavailable — type location');
+    };
+
+    void hydrateCurrentAddress();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [scanMode, isLoaded, resolveCurrentLocationAddress, getBestCurrentPosition, resolveApproximateLocation]);
 
   const generateSimulatedZone = (name: string, lat: number, lng: number): FloodZone => {
     // Simple hash function to generate consistent pseudo-random numbers based on location name
@@ -239,113 +585,206 @@ export default function MapScreen({ onScanClick, onTabChange, initialShowLocatio
     };
   };
 
-  const handleSearch = (isSelectingMode = false) => {
-    if (!manualLocation.trim()) {
+  const fetchRiskForLocation = async (locationName: string, lat: number, lng: number, requestId?: number) => {
+    if (requestId !== undefined && requestId !== searchRequestIdRef.current) return;
+
+    try {
+      const risk: LocationRiskAnalysis = await Promise.race([
+        analyzeLocationRisk(locationName, lat, lng),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error('Location risk analysis timeout')), 9000)
+        )
+      ]);
+      const zone: FloodZone = {
+        id: `live_${Date.now()}`,
+        name: locationName,
+        specificLocation: locationName,
+        state: 'Malaysia',
+        region: 'Malaysia',
+        center: { lat, lng },
+        paths: [],
+        severity: risk.severity,
+        forecast: risk.aiAnalysisText,
+        color: risk.severity >= 8 ? 'red' : risk.severity >= 4 ? 'orange' : 'green',
+        lastUpdated: new Date().toISOString(),
+        drainageBlockage: risk.drainageBlockage,
+        rainfall: risk.rainfall,
+        aiConfidence: 90,
+        aiAnalysisText: risk.aiAnalysisText,
+        aiAnalysis: {
+          waterDepth: risk.waterLevel === 'High' ? '> 1.0m' : risk.waterLevel === 'Medium' ? '0.3–1.0m' : '< 0.3m',
+          currentSpeed: risk.waterLevelStatus === 'Rising' ? 'Rapid' : risk.waterLevelStatus === 'Stable' ? 'Moderate' : 'Slow',
+          riskLevel: risk.severity >= 7 ? 'High' : risk.severity >= 4 ? 'Medium' : 'Low',
+          historicalContext: risk.historical.frequency
+        },
+        aiRecommendation: {
+          impassableRoads: risk.severity >= 8 ? 'Multiple reported' : 'None reported',
+          evacuationRoute: 'Follow local authority signs',
+          evacuationCenter: 'Nearest school or community hall'
+        },
+        sources: ['Gemini AI', 'Google Search', 'MetMalaysia', 'JPS'],
+        terrain: risk.terrain,
+        historical: risk.historical
+      };
+      if (requestId !== undefined && requestId !== searchRequestIdRef.current) return;
+      setLocationWarning('');
+      setSearchedZone(zone);
+    } catch {
+      if (requestId !== undefined && requestId !== searchRequestIdRef.current) return;
+      setSearchedZone(null);
+      setIsSearchActive(false);
+      setLocationWarning('Unable to fetch live flood analysis for this location right now. Please try again in a moment.');
+    } finally {
+      if (requestId !== undefined && requestId !== searchRequestIdRef.current) return;
+      setIsLoadingRisk(false);
+    }
+  };
+
+  const resolveMalaysiaLocation = async (query: string): Promise<ResolvedMapLocation | null> => {
+    if (!(window.google && window.google.maps && window.google.maps.Geocoder && window.google.maps.places?.AutocompleteService)) {
+      return null;
+    }
+
+    const autocomplete = new window.google.maps.places.AutocompleteService();
+    const geocoder = new window.google.maps.Geocoder();
+
+    const prediction = await new Promise<google.maps.places.AutocompletePrediction | null>((resolve) => {
+      autocomplete.getPlacePredictions(
+        {
+          input: query,
+          componentRestrictions: { country: 'my' }
+        },
+        (predictions, status) => {
+          const okStatus = window.google.maps.places.PlacesServiceStatus.OK;
+          if (status !== okStatus || !predictions || predictions.length === 0) {
+            resolve(null);
+            return;
+          }
+          const matchedPrediction = predictions.find(prediction => predictionMatchesQuery(query, prediction)) || null;
+          resolve(matchedPrediction);
+        }
+      );
+    });
+
+    if (!prediction?.place_id) return null;
+
+    const result = await new Promise<google.maps.GeocoderResult | null>((resolve) => {
+      geocoder.geocode({ placeId: prediction.place_id }, (results, status) => {
+        if (status !== 'OK' || !results || !results[0]) {
+          resolve(null);
+          return;
+        }
+        resolve(results[0]);
+      });
+    });
+
+    if (!result) return null;
+
+    const location = result.geometry.location;
+    const lat = location.lat();
+    const lng = location.lng();
+    const formattedAddress = result.formatted_address || '';
+    const isMalaysiaResult = formattedAddress.toLowerCase().includes('malaysia');
+    const withinBounds = lat >= 1.0 && lat <= 7.5 && lng >= 99.0 && lng <= 120.0;
+
+    if (!isMalaysiaResult || !withinBounds) return null;
+
+    return {
+      lat,
+      lng,
+      address: formattedAddress,
+    };
+  };
+
+  const markInvalidLocation = (message = 'Location not found in Malaysia Google Maps. Please enter a valid city, town, district, or landmark name.') => {
+    setLocationNotFound(true);
+    setLocationWarning(message);
+    setSearchedZone(null);
+    setIsSearchActive(false);
+    setIsLoadingRisk(false);
+  };
+
+  const handleSelectingLocationSearch = async (queryOverride?: string) => {
+    const query = (queryOverride ?? manualLocation).trim();
+    if (!query) return;
+
+    if (query.length < 3) {
+      markInvalidLocation('Please enter the full name of a valid location in Malaysia Google Maps.');
+      return;
+    }
+
+    if (!isMalaysianLocation(query)) {
+      markInvalidLocation(getMalaysiaLocationWarning());
+      return;
+    }
+
+    setLocationWarning('');
+    setLocationNotFound(false);
+
+    const resolved = await resolveMalaysiaLocation(query);
+    if (!resolved) {
+      markInvalidLocation();
+      return;
+    }
+
+    setManualLocation(query);
+    setScanMode('selecting');
+    setMapCenter({ lat: resolved.lat, lng: resolved.lng });
+    setMapZoom(16);
+
+    if (mapRef.current) {
+      mapRef.current.panTo({ lat: resolved.lat, lng: resolved.lng });
+      mapRef.current.setZoom(16);
+    }
+  };
+
+  const handleSearch = async (isSelectingMode = false, queryOverride?: string) => {
+    const query = (queryOverride ?? manualLocation).trim();
+    const requestId = ++searchRequestIdRef.current;
+
+    if (!query) {
       if (!isSelectingMode) {
         setIsSearchActive(false);
         setSearchedZone(null);
+        setIsLoadingRisk(false);
       }
       return;
     }
-    
+
+    if (query.length < 3) {
+      markInvalidLocation('Please enter the full name of a valid location in Malaysia Google Maps.');
+      return;
+    }
+
     // Validate if location is Malaysian before searching
-    if (!isMalaysianLocation(manualLocation)) {
-      // Don't search for non-Malaysian locations
-      if (!isSelectingMode) {
-        setIsSearchActive(false);
-        setSearchedZone(null);
-      }
-      setLocationWarning(getMalaysiaLocationWarning());
+    if (!isMalaysianLocation(query)) {
+      markInvalidLocation(getMalaysiaLocationWarning());
       return;
     }
     
     // Clear warning and not-found flag
     setLocationWarning('');
     setLocationNotFound(false);
-    
-    if (!isSelectingMode) {
-      setIsSearchActive(true);
-    }
-    
-    const searchLower = manualLocation.toLowerCase();
-    
-    // Check if it exactly matches a predefined zone first
-    const matchedZone = Object.values(zones).find(z => {
-      const zone = z as FloodZone;
-      return zone.name.toLowerCase().includes(searchLower) || 
-             zone.specificLocation.toLowerCase().includes(searchLower);
-    }) as FloodZone | undefined;
 
-    if (matchedZone) {
-      const newCenter = { lat: matchedZone.center.lat, lng: matchedZone.center.lng };
+    const resolved = await resolveMalaysiaLocation(query);
+    if (requestId !== searchRequestIdRef.current) return;
+
+    if (resolved) {
+      const newCenter = { lat: resolved.lat, lng: resolved.lng };
       setMapCenter(newCenter);
       setMapZoom(14);
       if (!isSelectingMode) {
-        setSearchedZone(matchedZone);
+        setIsSearchActive(true);
+        setSearchedZone(null);
+        setIsLoadingRisk(true);
+        void fetchRiskForLocation(query, resolved.lat, resolved.lng, requestId);
       }
       if (mapRef.current) {
         mapRef.current.panTo(newCenter);
         mapRef.current.setZoom(14);
       }
-      return;
-    }
-
-    // Use Geocoder for NLP/address search to find the exact location
-    if (window.google && window.google.maps && window.google.maps.Geocoder) {
-      const geocoder = new window.google.maps.Geocoder();
-      geocoder.geocode({ address: `${manualLocation}, Malaysia` }, (results, status) => {
-        if (status === 'OK' && results && results[0]) {
-          const result = results[0];
-          const location = result.geometry.location;
-          const lat = location.lat();
-          const lng = location.lng();
-
-          // Check 1: formatted address must explicitly contain "Malaysia"
-          const formattedAddress = result.formatted_address || '';
-          const isMalaysiaResult = formattedAddress.toLowerCase().includes('malaysia');
-
-          // Check 2: coordinates within Malaysia's geographic bounds
-          const withinBounds =
-            lat >= 1.0 && lat <= 7.5 &&
-            lng >= 99.0 && lng <= 120.0;
-
-          // Check 3: result must be a real named place, not a fuzzy route/premise/plus-code match
-          const VALID_PLACE_TYPES = new Set([
-            'locality', 'sublocality', 'sublocality_level_1', 'sublocality_level_2',
-            'neighborhood', 'colloquial_area',
-            'administrative_area_level_1', 'administrative_area_level_2',
-            'administrative_area_level_3', 'administrative_area_level_4',
-            'natural_feature', 'establishment', 'point_of_interest',
-            'park', 'airport', 'university', 'hospital', 'school',
-          ]);
-          const resultTypes: string[] = result.types || [];
-          const isRealPlace = resultTypes.some(t => VALID_PLACE_TYPES.has(t));
-
-          if (!isMalaysiaResult || !withinBounds || !isRealPlace) {
-            setLocationNotFound(true);
-            setSearchedZone(null);
-            setIsSearchActive(false);
-            return;
-          }
-
-          const newCenter = { lat, lng };
-          setMapCenter(newCenter);
-          setMapZoom(14);
-          if (!isSelectingMode) {
-            const simulatedZone = generateSimulatedZone(manualLocation, lat, lng);
-            setSearchedZone(simulatedZone);
-          }
-          if (mapRef.current) {
-            mapRef.current.panTo(newCenter);
-            mapRef.current.setZoom(14);
-          }
-        } else {
-          // Geocoding returned no results — show not found error
-          setLocationNotFound(true);
-          setSearchedZone(null);
-          setIsSearchActive(false);
-        }
-      });
+    } else {
+      markInvalidLocation();
     }
   };
 
@@ -541,7 +980,7 @@ export default function MapScreen({ onScanClick, onTabChange, initialShowLocatio
         {/* Search Bar & Live Indicator */}
         <div className={`absolute top-20 left-0 right-0 px-4 z-40 flex flex-col gap-3 transition-opacity duration-300 ${scanMode === 'selecting' ? 'opacity-0 pointer-events-none' : 'opacity-100'}`}>
           <div className="flex items-center bg-white/90 backdrop-blur-md px-4 py-3 rounded-2xl shadow-lg border border-white/20">
-            <button onClick={handleSearch} className="material-icons-round text-slate-400 mr-3 hover:text-[#6366F1] transition-colors">search</button>
+            <button onClick={() => void handleSearch()} className="material-icons-round text-slate-400 mr-3 hover:text-[#6366F1] transition-colors">search</button>
             <input 
               className="bg-transparent border-none outline-none text-slate-700 w-full p-0 focus:ring-0 placeholder-slate-400" 
               placeholder="Search location..." 
@@ -562,12 +1001,21 @@ export default function MapScreen({ onScanClick, onTabChange, initialShowLocatio
                 if (value === '') {
                   setIsSearchActive(false);
                   setSearchedZone(null);
+                  setIsLoadingRisk(false);
                   setLocationWarning('');
+                  if (autoSearchTimerRef.current) {
+                    clearTimeout(autoSearchTimerRef.current);
+                    autoSearchTimerRef.current = null;
+                  }
+                } else if (!isMalaysianLocation(value)) {
+                  setIsSearchActive(false);
+                  setSearchedZone(null);
+                  setIsLoadingRisk(false);
                 }
               }}
               onKeyDown={(e) => {
                 if (e.key === 'Enter') {
-                  handleSearch();
+                  void handleSearch();
                 }
               }}
             />
@@ -587,8 +1035,8 @@ export default function MapScreen({ onScanClick, onTabChange, initialShowLocatio
             <div className="bg-red-50 border border-red-200 rounded-xl px-4 py-3 flex items-start gap-2 shadow-md">
               <span className="material-icons-round text-red-500 text-lg mt-0.5">location_off</span>
               <div>
-                <p className="text-red-700 text-sm font-semibold">Location not found in Malaysia</p>
-                <p className="text-red-500 text-xs mt-0.5">"<span className="font-medium">{manualLocation}</span>" could not be matched to any place in Malaysia. Try a city, town, or district name.</p>
+                <p className="text-red-700 text-sm font-semibold">Location not found in Malaysia Google Maps</p>
+                <p className="text-red-500 text-xs mt-0.5">"<span className="font-medium">{manualLocation}</span>" is not an existing location in Malaysia Google Maps. Please try a valid city, town, district, or landmark name.</p>
               </div>
             </div>
           )}
@@ -611,6 +1059,7 @@ export default function MapScreen({ onScanClick, onTabChange, initialShowLocatio
                   <button 
                     onClick={() => {
                       setIsSearchActive(false);
+                      setIsLoadingRisk(false);
                       setManualLocation('');
                     }}
                     className="absolute top-4 right-4 w-8 h-8 bg-slate-100 rounded-full flex items-center justify-center text-slate-500 hover:bg-slate-200"
@@ -712,36 +1161,24 @@ export default function MapScreen({ onScanClick, onTabChange, initialShowLocatio
                   </div>
                 </div>
               </div>
-            ) : (
-              <div className="bg-white rounded-3xl p-6 shadow-xl border border-slate-100 relative text-center">
-                <button 
-                  onClick={() => {
-                    setIsSearchActive(false);
-                    setManualLocation('');
-                  }}
-                  className="absolute top-4 right-4 w-8 h-8 bg-slate-100 rounded-full flex items-center justify-center text-slate-500 hover:bg-slate-200"
-                >
-                  <span className="material-icons-round text-sm">close</span>
-                </button>
-                <div className="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-4">
-                  <span className="material-icons-round text-green-500 text-3xl">check_circle</span>
+            ) : isLoadingRisk ? (
+              <div className="flex flex-col gap-4 pb-20 animate-pulse">
+                <div className="bg-white rounded-3xl p-6 shadow-xl border border-slate-100 relative flex-shrink-0">
+                  <div className="h-4 bg-slate-100 rounded w-1/2 mx-auto mb-4" />
+                  <div className="h-16 bg-slate-100 rounded w-1/3 mx-auto mb-4" />
+                  <div className="h-2 bg-slate-100 rounded-full mb-2" />
+                  <div className="flex justify-between">
+                    <div className="h-3 bg-slate-100 rounded w-1/4" />
+                    <div className="h-3 bg-slate-100 rounded w-1/4" />
+                  </div>
+                  <p className="text-xs text-center text-slate-400 mt-4 animate-none">Fetching real-time flood data...</p>
                 </div>
-                <h3 className="text-xl font-bold text-slate-800 mb-2">Location is Safe</h3>
-                <p className="text-sm text-slate-500 mb-4">
-                  There are currently no active flood warnings or user reports for this area. Conditions appear to be normal.
-                </p>
-                <div className="flex justify-center gap-4 text-xs font-bold text-slate-400 uppercase tracking-wider">
-                  <div className="flex items-center gap-1">
-                    <span className="material-icons-round text-green-500 text-sm">water_drop</span>
-                    Normal
-                  </div>
-                  <div className="flex items-center gap-1">
-                    <span className="material-icons-round text-green-500 text-sm">traffic</span>
-                    Clear
-                  </div>
+                <div className="bg-[#6366F1]/20 rounded-2xl p-5 h-24 flex-shrink-0" />
+                <div className="grid grid-cols-2 gap-3 flex-shrink-0">
+                  {[0,1,2,3].map(i => <div key={i} className="bg-white rounded-2xl p-4 shadow-sm border border-slate-100 h-24" />)}
                 </div>
               </div>
-            )}
+            ) : null}
           </div>
         )}
 
@@ -749,7 +1186,7 @@ export default function MapScreen({ onScanClick, onTabChange, initialShowLocatio
         <div className={`absolute top-20 left-0 right-0 px-4 z-40 transition-opacity duration-300 ${scanMode === 'selecting' ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}>
           <div className="flex flex-col gap-2">
             <div className="flex items-center bg-white px-4 py-3 rounded-2xl shadow-lg border border-slate-200">
-              <button onClick={handleSearch} className="material-icons-round text-slate-400 mr-3 hover:text-[#6366F1] transition-colors">search</button>
+              <button onClick={() => void handleSelectingLocationSearch()} className="material-icons-round text-slate-400 mr-3 hover:text-[#6366F1] transition-colors">search</button>
               <input 
                 autoFocus={scanMode === 'selecting'}
                 className="bg-transparent border-none outline-none text-slate-700 w-full p-0 focus:ring-0 placeholder-slate-400 font-medium" 
@@ -776,7 +1213,7 @@ export default function MapScreen({ onScanClick, onTabChange, initialShowLocatio
                 }}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter') {
-                    handleSearch();
+                    void handleSelectingLocationSearch();
                 }
               }}
             />
@@ -843,21 +1280,62 @@ export default function MapScreen({ onScanClick, onTabChange, initialShowLocatio
               <h2 className="text-2xl font-bold text-slate-900 mb-6">Where is the flood?</h2>
               
               <button 
-                onClick={() => {
-                  if (navigator.geolocation) {
-                    navigator.geolocation.getCurrentPosition((pos) => {
-                      setScanMode('none');
-                      const addressToUse = currentAddress.startsWith('Current: ') ? currentAddress.replace('Current: ', '') : 'Current Location';
-                      onScanClick({ lat: pos.coords.latitude, lng: pos.coords.longitude, address: addressToUse });
-                    }, () => {
-                      // Fallback if geolocation fails
-                      setScanMode('none');
-                      onScanClick({ lat: 3.14, lng: 101.69, address: 'Kuala Lumpur (Default)' });
-                    });
-                  } else {
-                    setScanMode('none');
-                    onScanClick({ lat: 3.14, lng: 101.69, address: 'Kuala Lumpur (Default)' });
+                onClick={async () => {
+                  let location = currentGpsLocation;
+
+                  if (!location) {
+                    const position = await getBestCurrentPosition();
+                    if (position) {
+                      location = {
+                        lat: position.coords.latitude,
+                        lng: position.coords.longitude,
+                      };
+                      setCurrentGpsLocation(location);
+                    }
                   }
+
+                  if (!location && navigator.geolocation) {
+                    try {
+                      const coarse = await getCurrentPositionWithOptions({
+                        enableHighAccuracy: false,
+                        timeout: 12000,
+                        maximumAge: 600000,
+                      });
+                      if (isWithinMalaysiaBounds(coarse.coords.latitude, coarse.coords.longitude)) {
+                        location = { lat: coarse.coords.latitude, lng: coarse.coords.longitude };
+                        setCurrentGpsLocation(location);
+                      }
+                    } catch {
+                      // keep null
+                    }
+                  }
+
+                  if (!location) {
+                    const lastPrecise = readLastPreciseLocation();
+                    if (lastPrecise) {
+                      location = { lat: lastPrecise.lat, lng: lastPrecise.lng };
+                      setCurrentGpsLocation(location);
+                    }
+                  }
+
+                  if (!location) {
+                    const approximate = await resolveApproximateLocation();
+                    if (approximate) {
+                      location = { lat: approximate.lat, lng: approximate.lng };
+                      setCurrentGpsLocation(location);
+                    }
+                  }
+
+                  if (!location) {
+                    setCurrentAddress('Current: GPS unavailable — type location');
+                    setLocationWarning('Unable to detect your current location. Please type your location (e.g., Kajang).');
+                    return;
+                  }
+
+                  setLocationWarning('');
+                  const displayName = await resolveCurrentLocationAddress(location.lat, location.lng);
+                  setScanMode('none');
+                  onScanClick({ lat: location.lat, lng: location.lng, address: displayName });
                 }}
                 className="w-full flex items-center justify-center gap-3 bg-[#6366F1]/10 text-[#6366F1] py-4 rounded-2xl font-bold mb-4 active:scale-95 transition-transform"
               >
@@ -897,16 +1375,14 @@ export default function MapScreen({ onScanClick, onTabChange, initialShowLocatio
                   }}
                   onKeyDown={(e) => {
                     if (e.key === 'Enter') {
-                      setScanMode('selecting');
-                      handleSearch(true);
+                      void handleSelectingLocationSearch(manualLocation);
                     }
                   }}
                 />
                 <button 
                   onClick={() => {
                     if (manualLocation.trim()) {
-                      setScanMode('selecting');
-                      handleSearch(true);
+                      void handleSelectingLocationSearch(manualLocation);
                     }
                   }}
                   className="absolute inset-y-0 right-0 pr-4 flex items-center text-[#6366F1] font-bold"

@@ -8,6 +8,74 @@ interface CameraScreenProps {
   onTabChange: (tab: 'map' | 'report' | 'alert' | 'dashboard') => void;
 }
 
+const severityLabelFromScore = (riskScore: number) => {
+  if (riskScore >= 9) return 'CRITICAL';
+  if (riskScore >= 7) return 'SEVERE';
+  if (riskScore >= 5) return 'MODERATE';
+  if (riskScore >= 3) return 'MINOR';
+  return 'NORMAL';
+};
+
+const buildEvidenceText = (result: FloodAnalysisResult) => [
+  result.detectedHazards,
+  result.directive,
+  result.waterDepth,
+  result.infrastructureStatus,
+  result.estimatedDepth,
+  result.humanRisk,
+  result.eventType,
+].join(' ').toLowerCase();
+
+const inferMinimumScoreFromText = (result: FloodAnalysisResult) => {
+  const text = buildEvidenceText(result);
+
+  let minimum = 0;
+
+  if (/(car\s*(fully\s*)?submerge|vehicle\s*(fully\s*)?submerge|second\s*floor\s*flood|2nd\s*floor\s*flood)/i.test(text)) {
+    minimum = Math.max(minimum, 9);
+  }
+  if (/(car\s*roof|vehicle\s*roof|roof\s*level)/i.test(text) && /(submerge|flood|waterline|underwater)/i.test(text)) {
+    minimum = Math.max(minimum, 8);
+  }
+  if (/(car\s*bonnet|car\s*hood|waist\s*-?\s*deep|chest\s*-?\s*deep)/i.test(text)) {
+    minimum = Math.max(minimum, 7);
+  }
+  if (/(knee\s*-?\s*deep|stalled\s*vehicles|roads\s*partially\s*submerged)/i.test(text)) {
+    minimum = Math.max(minimum, 5);
+  }
+
+  return minimum;
+};
+
+const hasFloodSignals = (result: FloodAnalysisResult) => {
+  const text = buildEvidenceText(result);
+
+  if (!text.trim()) return false;
+  if (/retake the image|clearer view of the flooded area|accepted for manual review/i.test(text)) {
+    return false;
+  }
+
+  return /(submerge|submerged|waterlog|overflow|overflowing|drain block|blocked drain|stalled\s*vehicle|swift\s*current|strong\s*current|waist\s*-?deep|knee\s*-?deep|bonnet|roof\s*level|road\s*submerged|street\s*flooded|water\s*covering\s*(road|street)|floodwater|flash flood|river\s*overflow|canal\s*overflow)/i.test(text);
+};
+
+const coerceToRelevantAnalysis = (result: FloodAnalysisResult): FloodAnalysisResult => {
+  const minimum = inferMinimumScoreFromText(result);
+  const nextScore = Math.max(result.riskScore || 0, minimum, 3);
+
+  return {
+    ...result,
+    isRelevant: true,
+    rejectionReason: '',
+    riskScore: nextScore,
+    severity: severityLabelFromScore(nextScore),
+    humanRisk: nextScore >= 9 ? 'Critical' : nextScore >= 7 ? 'High' : nextScore >= 5 ? 'Moderate' : result.humanRisk || 'Low',
+    directive: nextScore >= 7
+      ? 'Severe flood indicators detected. Avoid this area immediately and move to higher ground.'
+      : 'Flood/water condition detected. Follow local advisories and monitor water level changes.',
+    eventType: result.eventType || 'Flood Observation',
+  };
+};
+
 // ── Image compression helper ──────────────────────────────────────────────────
 // Resizes to 480px max and compresses to JPEG 0.65
 // This keeps enough detail for Gemini vision while minimising upload size
@@ -72,10 +140,13 @@ export default function CameraScreen({ onBack, onAnalysisComplete, onTabChange }
 
     setIsAnalyzing(true);
     setError(null);
+    let dataUrl = '';
 
     try {
       // Step 1: Compress image
-      const { base64, dataUrl } = await compressImage(file);
+      const compressed = await compressImage(file);
+      const base64 = compressed.base64;
+      dataUrl = compressed.dataUrl;
 
       // Step 2: Gemini analysis with 40s hard UI timeout
       const result = await Promise.race([
@@ -89,18 +160,23 @@ export default function CameraScreen({ onBack, onAnalysisComplete, onTabChange }
 
       // Step 3: Route result
       if (!result.isRelevant) {
-        setRejectionModal({
-          visible: true,
-          reason: result.rejectionReason ||
-            'This image does not appear to show a flood or drainage condition. Please capture a photo of a flooded area, waterlogged road, blocked drain, or overflowing drainage system.'
-        });
+        if (hasFloodSignals(result)) {
+          onAnalysisComplete(coerceToRelevantAnalysis(result), dataUrl);
+        } else {
+          setRejectionModal({
+            visible: true,
+            reason: result.rejectionReason || 'This image does not show an accepted flood, drainage, river/canal, or waterlogged-area scene.'
+          });
+        }
       } else {
         onAnalysisComplete(result, dataUrl);
       }
 
     } catch (err: any) {
       console.error('[CameraScreen]', err);
+
       setError(err?.message || 'Analysis failed. Please try again.');
+
       setIsAnalyzing(false);
     }
   };

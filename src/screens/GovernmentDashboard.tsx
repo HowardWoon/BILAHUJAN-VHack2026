@@ -1,4 +1,4 @@
-import React, { useEffect, useState, FC, useMemo } from 'react';
+import React, { useEffect, useState, FC, useMemo, useRef } from 'react';
 import {
   FloodStatistics,
   LocationAnalytics,
@@ -8,10 +8,12 @@ import {
   getInfrastructureInsights
 } from '../services/governmentAnalytics';
 import { DataExportPanel } from '../components/DataExportPanel';
-import MissionLogPanel from '../components/MissionLogPanel';
 import BottomNav from '../components/BottomNav';
 import { useLiveNodes, useNodeStats } from '../services/nodeDiscovery';
 import { SensorNode, SwarmNetworkStats } from '../types/swarm';
+import { MissionLogPanel } from '../components/MissionLogPanel';
+import { ref, onValue } from 'firebase/database';
+import { rtdb } from '../firebase';
 
 interface GovernmentDashboardProps {
   onTabChange: (tab: 'map' | 'report' | 'alert' | 'dashboard') => void;
@@ -23,163 +25,71 @@ interface SwarmSectionProps {
 }
 
 const SwarmSection = React.memo(function SwarmSection({ nodes, nodeStats }: SwarmSectionProps) {
-  const [selectedNode, setSelectedNode] = useState<SensorNode | null>(null);
-
   return (
-    <div className="bg-white rounded-lg shadow-md p-6">
-      <h2 className="text-2xl font-bold text-gray-800 mb-2 flex items-center gap-2">🛰️ Swarm Intelligence Network</h2>
-      <p className="text-gray-500 text-sm mb-6">
+    <section data-purpose="swarm-intelligence-network" className="space-y-5">
+      <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-100">
+        <div className="flex items-center gap-2 mb-2">
+          <span className="material-icons-round text-purple-600 text-xl">satellite_alt</span>
+          <h3 className="font-bold text-slate-800 text-lg">Swarm Intelligence Network</h3>
+        </div>
+        <p className="text-sm text-slate-500 mb-6 leading-relaxed">
         Real-time civilian sensor node network — every flood report becomes an active intelligence node in the swarm.
       </p>
 
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
-        <div className="bg-white rounded-lg shadow-sm border p-4">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-gray-500 text-xs mb-1">Total Nodes</p>
-              <p className="text-3xl font-bold text-gray-800">{nodeStats.total}</p>
-            </div>
-            <span className="material-icons-round text-4xl text-purple-500">hub</span>
+        <div className="grid grid-cols-4 gap-2 mb-8">
+          <div className="border border-slate-200 rounded-xl p-2 text-center">
+            <span className="text-[9px] uppercase font-bold text-slate-400 block leading-tight">Total Nodes</span>
+            <span className="material-icons-round text-purple-500 text-xs my-1">hub</span>
+            <span className="text-xl font-bold text-slate-800 block">{nodeStats.total}</span>
+          </div>
+          <div className="border border-slate-200 rounded-xl p-2 text-center">
+            <span className="text-[9px] uppercase font-bold text-slate-400 block leading-tight">Active Nodes</span>
+            <span className="material-icons-round text-green-500 text-xs my-1">sensors</span>
+            <span className="text-xl font-bold text-slate-800 block">{nodeStats.active}</span>
+          </div>
+          <div className="border border-slate-200 rounded-xl p-2 text-center">
+            <span className="text-[9px] uppercase font-bold text-slate-400 block leading-tight">Idle Nodes</span>
+            <span className="material-icons-round text-orange-500 text-xs my-1">pause_circle</span>
+            <span className="text-xl font-bold text-slate-800 block">{nodeStats.idle}</span>
+          </div>
+          <div className="border border-slate-200 rounded-xl p-2 text-center">
+            <span className="text-[9px] uppercase font-bold text-slate-400 block leading-tight">Avg Severity</span>
+            <span className="material-icons-round text-red-500 text-xs my-1">monitoring</span>
+            <span className="text-base font-bold text-red-600 block leading-tight mt-1">{nodeStats.avgNetworkSeverity.toFixed(1)}/10</span>
           </div>
         </div>
 
-        <div className="bg-white rounded-lg shadow-sm border p-4">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-gray-500 text-xs mb-1">Active Nodes</p>
-              <p className="text-3xl font-bold text-green-600">{nodeStats.active}</p>
+        <div className="mb-4">
+          <div className="flex justify-between items-center mb-4">
+            <div className="flex items-center gap-2">
+              <span className="material-icons-round text-blue-500">scatter_plot</span>
+              <span className="font-bold text-slate-700 text-sm">Live Sensor Nodes</span>
             </div>
-            <span className="material-icons-round text-4xl text-green-500">sensors</span>
+            <span className="text-[10px] text-slate-400">Click a node to inspect</span>
           </div>
-        </div>
 
-        <div className="bg-white rounded-lg shadow-sm border p-4">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-gray-500 text-xs mb-1">Idle Nodes</p>
-              <p className="text-3xl font-bold text-yellow-600">{nodeStats.idle}</p>
-            </div>
-            <span className="material-icons-round text-4xl text-yellow-500">pause_circle</span>
-          </div>
-        </div>
-
-        <div className="bg-white rounded-lg shadow-sm border p-4">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-gray-500 text-xs mb-1">Avg Severity</p>
-              <p className="text-3xl font-bold text-red-600">{nodeStats.avgNetworkSeverity.toFixed(1)}/10</p>
-            </div>
-            <span className="material-icons-round text-4xl text-red-500">monitoring</span>
+          <div className="border-2 border-dashed border-slate-100 rounded-xl p-8 text-center bg-slate-50/50">
+            <p className="text-slate-400 text-xs italic">
+              {nodes.length === 0 ? 'No active sensor nodes. Awaiting citizen flood reports.' : `${nodes.length} sensor nodes currently active.`}
+            </p>
           </div>
         </div>
       </div>
 
-      <div className="mb-6">
-        <h3 className="font-semibold text-gray-700 mb-3 flex items-center gap-2">
-          <span className="material-icons-round text-blue-500 text-base">scatter_plot</span>
-          Live Sensor Nodes
-          <span className="ml-auto text-xs text-gray-400">Click a node to inspect</span>
-        </h3>
-
-        {nodes.length === 0 ? (
-          <div className="flex items-center justify-center h-24 bg-gray-50 rounded-lg border-2 border-dashed border-gray-200">
-            <p className="text-gray-400 italic text-sm">No active sensor nodes. Awaiting citizen flood reports.</p>
+      <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-100">
+        <div className="flex items-center gap-3 mb-4">
+          <div className="bg-green-100 p-3 rounded-xl text-green-600 flex-shrink-0">
+            <span className="material-icons-round text-xl">smart_toy</span>
           </div>
-        ) : (
-          <div className="flex flex-wrap gap-4 p-4 bg-gray-50 rounded-lg min-h-24">
-            {nodes.map((node) => {
-              const sizeClass = node.currentSeverity >= 7 ? 'w-8 h-8' : node.currentSeverity >= 4 ? 'w-6 h-6' : 'w-4 h-4';
-              const colorClass =
-                node.status === 'active' ? 'bg-green-500' : node.status === 'idle' ? 'bg-yellow-500' : 'bg-red-500';
-              const pulseClass = node.status === 'active' ? 'animate-pulse' : '';
-              const ringClass = selectedNode?.nodeId === node.nodeId ? 'ring-2 ring-blue-500 ring-offset-2' : '';
-
-              return (
-                <div
-                  key={node.nodeId}
-                  onClick={() => setSelectedNode(selectedNode?.nodeId === node.nodeId ? null : node)}
-                  className="relative cursor-pointer group flex flex-col items-center"
-                  title={`${node.nodeId} | ${node.location.address} | Severity: ${node.currentSeverity} | ${node.status}`}
-                >
-                  <div
-                    className={`rounded-full transition-all hover:scale-125 ${sizeClass} ${colorClass} ${pulseClass} ${ringClass}`}
-                  />
-                  <span className="mt-1 text-[9px] text-gray-500 opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap">
-                    {node.nodeId}
-                  </span>
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </div>
-
-      {selectedNode && (
-        <div className="mb-6 p-4 bg-blue-50 border border-blue-200 rounded-lg">
-          <div className="flex items-center justify-between mb-3">
-            <h4 className="font-bold text-blue-800 flex items-center gap-2">
-              <span className="material-icons-round text-sm">sensors</span>
-              {selectedNode.nodeId}
-            </h4>
-            <button
-              onClick={() => setSelectedNode(null)}
-              className="text-blue-600 hover:text-blue-900 text-sm font-medium"
-            >
-              ✕ Close
-            </button>
-          </div>
-          <div className="grid grid-cols-2 gap-3 text-sm">
-            <div>
-              <span className="text-blue-600 font-medium">Status: </span>
-              <span
-                className={`px-1.5 py-0.5 rounded text-xs font-bold ${
-                  selectedNode.status === 'active'
-                    ? 'bg-green-100 text-green-700'
-                    : selectedNode.status === 'idle'
-                    ? 'bg-yellow-100 text-yellow-700'
-                    : 'bg-red-100 text-red-700'
-                }`}
-              >
-                {selectedNode.status.toUpperCase()}
-              </span>
-            </div>
-            <div>
-              <span className="text-blue-600 font-medium">Severity: </span>
-              <span className="font-bold">{selectedNode.currentSeverity}/10</span>
-            </div>
-            <div className="col-span-2">
-              <span className="text-blue-600 font-medium">Location: </span>
-              {selectedNode.location.address}
-            </div>
-            <div>
-              <span className="text-blue-600 font-medium">Last Seen: </span>
-              {new Date(selectedNode.lastSeen).toLocaleString()}
-            </div>
-            <div>
-              <span className="text-blue-600 font-medium">Reports: </span>
-              {selectedNode.reportCount}
-            </div>
-            <div>
-              <span className="text-blue-600 font-medium">Avg Severity: </span>
-              {selectedNode.avgSeverity.toFixed(1)}/10
-            </div>
-            <div>
-              <span className="text-blue-600 font-medium">Node ID: </span>
-              <span className="font-mono">{selectedNode.nodeId}</span>
-            </div>
+          <div>
+            <h3 className="font-bold text-slate-800 text-lg leading-tight">Autonomous Command Agent</h3>
+            <p className="text-[10px] text-slate-400 uppercase font-semibold tracking-wider">Powered by Gemini AI • MCP Tool Architecture</p>
           </div>
         </div>
-      )}
 
-      <div>
-        <h3 className="font-semibold text-gray-700 mb-3 flex items-center gap-2">
-          <span className="material-icons-round text-green-600 text-base">smart_toy</span>
-          Autonomous Command Agent
-          <span className="ml-2 text-xs text-gray-400 font-normal">— Powered by Gemini AI · MCP Tool Architecture</span>
-        </h3>
-        <MissionLogPanel className="w-full" />
+        <MissionLogPanel />
       </div>
-    </div>
+    </section>
   );
 });
 
@@ -190,6 +100,7 @@ export const GovernmentDashboard: FC<GovernmentDashboardProps> = ({ onTabChange 
   const [loading, setLoading] = useState(true);
   const [firstLoad, setFirstLoad] = useState(true);
   const [dateRange, setDateRange] = useState(30);
+  const refreshDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const nodes = useLiveNodes();
   const nodeStats = useNodeStats(nodes);
@@ -249,6 +160,25 @@ export const GovernmentDashboard: FC<GovernmentDashboardProps> = ({ onTabChange 
     }
   };
 
+  useEffect(() => {
+    const zonesRef = ref(rtdb, 'liveZones');
+    const unsubscribe = onValue(zonesRef, () => {
+      if (refreshDebounceRef.current) {
+        clearTimeout(refreshDebounceRef.current);
+      }
+      refreshDebounceRef.current = setTimeout(() => {
+        loadDashboardData();
+      }, 2000);
+    });
+
+    return () => {
+      unsubscribe();
+      if (refreshDebounceRef.current) {
+        clearTimeout(refreshDebounceRef.current);
+      }
+    };
+  }, []);
+
   const displayDrainageEfficiency = useMemo(() => {
     if (loading && !firstLoad) return null;
     if ((infrastructure?.drainageEfficiency ?? 0) > 0) {
@@ -282,22 +212,11 @@ export const GovernmentDashboard: FC<GovernmentDashboardProps> = ({ onTabChange 
 
   const locationTable = useMemo(
     () =>
-      locationAnalytics.slice(0, 10).map((loc, idx) => (
-        <tr key={idx} className="hover:bg-gray-50">
-          <td className="px-4 py-3 text-sm text-gray-800 font-medium">{loc.location}</td>
-          <td className="px-4 py-3 text-sm text-gray-600">{loc.state}</td>
-          <td className="px-4 py-3 text-sm text-center">{loc.incidentCount}</td>
-          <td className="px-4 py-3 text-sm text-center">
-            <span
-              className={`font-semibold ${
-                loc.avgSeverity >= 7 ? 'text-red-600' : loc.avgSeverity >= 4 ? 'text-orange-600' : 'text-green-600'
-              }`}
-            >
-              {loc.avgSeverity.toFixed(1)}
-            </span>
-          </td>
-          <td className="px-4 py-3 text-sm text-center">{loc.avgWaterLevel.toFixed(0)}cm</td>
-          <td className="px-4 py-3 text-sm text-center">{loc.avgDrainageBlockage.toFixed(0)}%</td>
+      locationAnalytics.map((loc, idx) => (
+        <tr key={idx}>
+          <td className="py-3 px-3 text-slate-400">{loc.location === '—' ? '—' : loc.location}</td>
+          <td className="py-3 px-3 font-medium text-slate-700">{loc.state}</td>
+          <td className="py-3 px-3 text-right font-bold text-slate-800">{loc.incidentCount}</td>
         </tr>
       )),
     [locationAnalytics]
@@ -318,179 +237,162 @@ export const GovernmentDashboard: FC<GovernmentDashboardProps> = ({ onTabChange 
   }
 
   return (
-    <div className="h-full bg-gray-50 pb-32 overflow-y-auto">
-      <div className="bg-gradient-to-r from-blue-600 to-blue-800 text-white p-6 shadow-lg">
-        <h1 className="text-3xl font-bold mb-2">BILAHUJAN Government Dashboard</h1>
-        <p className="text-blue-100">Real-time Flood Monitoring Analytics for JPS, NADMA & APM</p>
-      </div>
-
-      <div className="bg-white shadow-sm p-4 mb-6 sticky top-0 z-10">
-        <div className="max-w-7xl mx-auto flex flex-wrap items-center gap-4">
-          <label className="font-medium text-gray-700">Time Range:</label>
-          <select
-            value={dateRange}
-            onChange={(e) => setDateRange(Number(e.target.value))}
-            className="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-          >
-            <option value={7}>Last 7 Days</option>
-            <option value={30}>Last 30 Days</option>
-            <option value={90}>Last 90 Days</option>
-            <option value={365}>Last Year</option>
-          </select>
-
-          <button
-            onClick={loadDashboardData}
-            className="ml-auto bg-blue-500 hover:bg-blue-600 text-white px-6 py-2 rounded-lg flex items-center gap-2 transition-colors"
-          >
-            {loading && !firstLoad ? (
-              <span className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin" />
-            ) : (
-              <span className="material-icons-round text-sm">refresh</span>
-            )}
-            Refresh Data
-          </button>
-        </div>
-      </div>
-
-      <div className="max-w-7xl mx-auto px-4 space-y-6">
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-          <div className="bg-white rounded-lg shadow-md p-6">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-gray-500 text-sm mb-1">Total Incidents</p>
-                <p className="text-3xl font-bold text-gray-800">
-                  {loading && !firstLoad ? <span className="text-gray-300">--</span> : statistics?.totalIncidents || 0}
-                </p>
+    <div className="h-full bg-slate-50 overflow-y-auto">
+      <div className="max-w-[480px] mx-auto bg-white min-h-full shadow-[0_0_50px_rgba(0,0,0,0.08)] relative pb-32">
+        <header className="relative overflow-hidden p-6 pb-14 rounded-b-[3rem] shadow-2xl" style={{ background: 'radial-gradient(circle at top right, #1e40af, #0f172a)' }}>
+          <div className="absolute inset-0 opacity-10 pointer-events-none" style={{ backgroundImage: 'radial-gradient(#ffffff 1px, transparent 1px)', backgroundSize: '20px 20px' }}></div>
+          <div className="relative z-10">
+            <div className="flex justify-between items-start mb-6">
+              <div className="flex items-center gap-2 bg-white/5 backdrop-blur-md border border-white/20 px-3 py-1.5 rounded-full shadow-[0_0_15px_rgba(59,130,246,0.3)]">
+                <span className="material-icons-round text-blue-400 text-sm">verified_user</span>
+                <span className="text-[10px] font-bold tracking-[0.1em] uppercase text-blue-100">Government Secured</span>
               </div>
-              <span className="material-icons-round text-5xl text-red-500">warning</span>
+            </div>
+            <div className="bg-white/10 backdrop-blur-xl border border-white/10 p-6 rounded-3xl shadow-inner">
+              <h1 className="text-4xl font-black leading-tight mb-3 tracking-tighter text-white">
+                <span className="tracking-[0.15em] text-blue-400 block text-xs mb-1 font-bold">PLATFORM</span>
+                BILAHUJAN
+              </h1>
+              <div className="h-1 w-12 bg-blue-500 rounded-full mb-4"></div>
+              <p className="text-blue-100 text-sm font-medium leading-relaxed opacity-90">
+                Real-time Flood Monitoring Analytics
+                <br />
+                <span className="text-blue-300 font-bold">JPS • NADMA • APM</span>
+              </p>
             </div>
           </div>
+          <div className="absolute -bottom-10 -right-10 w-40 h-40 bg-blue-600/20 rounded-full blur-3xl"></div>
+        </header>
 
-          <div className="bg-white rounded-lg shadow-md p-6">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-gray-500 text-sm mb-1">Avg Severity</p>
-                <p className="text-3xl font-bold text-gray-800">
-                  {loading && !firstLoad ? (
-                    <span className="text-gray-300">--</span>
-                  ) : (
-                    `${statistics?.averageSeverity.toFixed(1) || '0.0'}/10`
-                  )}
-                </p>
-              </div>
-              <span className="material-icons-round text-5xl text-orange-500">speed</span>
+        <section className="px-6 -mt-8 relative z-20">
+          <div className="bg-white rounded-2xl shadow-lg p-4 flex flex-col sm:flex-row sm:items-end gap-4 border border-slate-100">
+            <div className="w-full sm:flex-1">
+              <label className="text-[10px] uppercase font-bold text-slate-400 block mb-1">Time Range</label>
+              <select
+                value={dateRange}
+                onChange={(e) => setDateRange(Number(e.target.value))}
+                className="block w-full text-sm border-none bg-slate-50 rounded-lg focus:ring-2 focus:ring-blue-500 py-2"
+              >
+                <option value={30}>Last 30 Days</option>
+                <option value={7}>Last 7 Days</option>
+                <option value={1}>Last 24 Hours</option>
+                <option value={90}>Last 90 Days</option>
+                <option value={365}>Last Year</option>
+              </select>
             </div>
-          </div>
-
-          <div className="bg-white rounded-lg shadow-md p-6">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-gray-500 text-sm mb-1">Affected Areas</p>
-                <p className="text-3xl font-bold text-gray-800">
-                  {loading && !firstLoad ? <span className="text-gray-300">--</span> : statistics?.affectedAreas || 0}
-                </p>
-              </div>
-              <span className="material-icons-round text-5xl text-blue-500">place</span>
-            </div>
-          </div>
-
-          <div className="bg-white rounded-lg shadow-md p-6">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-gray-500 text-sm mb-1">Drainage Efficiency</p>
-                <p className="text-3xl font-bold text-gray-800">
-                  {loading && !firstLoad ? (
-                    <span className="text-gray-300">--</span>
-                  ) : (
-                    `${displayDrainageEfficiency ?? 0}%`
-                  )}
-                </p>
-              </div>
-              <span className="material-icons-round text-5xl text-green-500">water_drop</span>
-            </div>
-          </div>
-        </div>
-
-        <div className="bg-white rounded-lg shadow-md p-6">
-          <h2 className="text-xl font-bold text-gray-800 mb-2 flex items-center gap-2">
-            <span className="material-icons-round text-red-500">location_city</span>
-            Most Affected Region
-          </h2>
-          <p className="text-2xl font-semibold text-gray-700">{displayMostAffectedRegion}</p>
-        </div>
-
-        <div className="bg-white rounded-lg shadow-md p-6">
-          <h2 className="text-xl font-bold text-gray-800 mb-4 flex items-center gap-2">
-            <span className="material-icons-round text-blue-500">analytics</span>
-            Location Analytics
-          </h2>
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[720px]">
-              <thead className="bg-gray-100">
-                <tr>
-                  <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700">Location</th>
-                  <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700">State</th>
-                  <th className="px-4 py-3 text-center text-sm font-semibold text-gray-700">Incidents</th>
-                  <th className="px-4 py-3 text-center text-sm font-semibold text-gray-700">Avg Severity</th>
-                  <th className="px-4 py-3 text-center text-sm font-semibold text-gray-700">Water Level</th>
-                  <th className="px-4 py-3 text-center text-sm font-semibold text-gray-700">Drainage</th>
-                </tr>
-              </thead>
-              <tbody>{locationTable}</tbody>
-            </table>
-          </div>
-        </div>
-
-        <div className="bg-white rounded-lg shadow-md p-6">
-          <h2 className="text-xl font-bold text-gray-800 mb-4 flex items-center gap-2">
-            <span className="material-icons-round text-yellow-500">engineering</span>
-            Infrastructure Insights
-          </h2>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            <div>
-              <h3 className="font-semibold text-gray-700 mb-2">Critical Zones</h3>
-              {infrastructure?.criticalZones.length ? (
-                <ul className="space-y-1">
-                  {infrastructure.criticalZones.map((zone, idx) => (
-                    <li key={idx} className="text-red-600 flex items-center gap-2">
-                      <span className="material-icons-round text-sm">error</span>
-                      {zone}
-                    </li>
-                  ))}
-                </ul>
+            <button
+              onClick={loadDashboardData}
+              className="w-full sm:w-auto sm:min-w-[150px] bg-blue-600 hover:bg-blue-700 text-white px-5 py-3 rounded-xl text-sm font-bold flex items-center justify-center gap-2 transition-all shadow-md active:scale-95"
+            >
+              {loading && !firstLoad ? (
+                <span className="material-icons-round text-sm animate-spin">progress_activity</span>
               ) : (
-                <p className="text-gray-500 italic">No critical zones</p>
+                <span className="material-icons-round text-sm">sync</span>
               )}
-            </div>
-
-            <div>
-              <h3 className="font-semibold text-gray-700 mb-2">Maintenance Needed</h3>
-              {infrastructure?.maintenanceNeeded.length ? (
-                <ul className="space-y-1">
-                  {infrastructure.maintenanceNeeded.map((zone, idx) => (
-                    <li key={idx} className="text-orange-600 flex items-center gap-2">
-                      <span className="material-icons-round text-sm">build</span>
-                      {zone}
-                    </li>
-                  ))}
-                </ul>
-              ) : (
-                <p className="text-gray-500 italic">All systems operational</p>
-              )}
-            </div>
+              Refresh Data
+            </button>
           </div>
+        </section>
 
-          <div className="mt-4 p-4 bg-blue-50 rounded-lg">
-            <p className="text-sm text-blue-800">
-              <strong>Average Response Time:</strong> {infrastructure?.responseTime ?? 0} minutes
-            </p>
-          </div>
-        </div>
+        <main className="p-6 space-y-8">
+          <section className="grid grid-cols-2 gap-4">
+            <div className="bg-white p-4 rounded-2xl shadow-sm border border-slate-100 flex flex-col items-center text-center">
+              <span className="text-slate-500 text-xs font-medium mb-1">Total Incidents</span>
+              <span className="material-icons-round text-red-500 text-xl mb-2">warning</span>
+              <span className="text-3xl font-bold text-slate-800">{loading && !firstLoad ? '--' : statistics?.totalIncidents || 0}</span>
+            </div>
+            <div className="bg-white p-4 rounded-2xl shadow-sm border border-slate-100 flex flex-col items-center text-center">
+              <span className="text-slate-500 text-xs font-medium mb-1">Avg Severity</span>
+              <span className="material-icons-round text-orange-500 text-xl mb-2">trending_up</span>
+              <span className="text-3xl font-bold text-slate-800">{loading && !firstLoad ? '--' : `${statistics?.averageSeverity.toFixed(1) || '0.0'}`}<span className="text-sm text-slate-400">/10</span></span>
+            </div>
+            <div className="bg-white p-4 rounded-2xl shadow-sm border border-slate-100 flex flex-col items-center text-center">
+              <span className="text-slate-500 text-xs font-medium mb-1">Affected Areas</span>
+              <span className="material-icons-round text-blue-500 text-xl mb-2">location_on</span>
+              <span className="text-3xl font-bold text-slate-800">{loading && !firstLoad ? '--' : statistics?.affectedAreas || 0}</span>
+            </div>
+            <div className="bg-white p-4 rounded-2xl shadow-sm border border-slate-100 flex flex-col items-center text-center">
+              <span className="text-slate-500 text-xs font-medium mb-1">Drainage Eff.</span>
+              <span className="material-icons-round text-teal-500 text-xl mb-2">water_drop</span>
+              <span className="text-3xl font-bold text-slate-800">{loading && !firstLoad ? '--' : `${displayDrainageEfficiency ?? 0}%`}</span>
+            </div>
+          </section>
 
-        <SwarmSection nodes={nodes} nodeStats={nodeStats} />
+          <section>
+            <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-100">
+              <div className="flex items-center gap-2 mb-3">
+                <div className="bg-red-50 p-2 rounded-lg">
+                  <span className="material-icons-round text-red-600">location_city</span>
+                </div>
+                <h3 className="font-bold text-slate-800">Most Affected Region</h3>
+              </div>
+              <p className="text-2xl font-bold text-slate-900">{displayMostAffectedRegion}</p>
+            </div>
+          </section>
 
-        <DataExportPanel />
+          <section>
+            <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-100">
+              <div className="flex items-center gap-2 mb-2">
+                <div className="bg-blue-50 p-2 rounded-lg text-blue-600">
+                  <span className="material-icons-round">bar_chart</span>
+                </div>
+                <h3 className="font-bold text-slate-800">Location Analytics</h3>
+              </div>
+              <p className="text-[11px] text-slate-400 mb-4">Showing all 16 Malaysia states and federal territories (16/16).</p>
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-sm">
+                  <thead>
+                    <tr className="bg-slate-50 text-slate-500">
+                      <th className="py-2 px-3 font-semibold rounded-l-lg">Top Hotspot</th>
+                      <th className="py-2 px-3 font-semibold">State</th>
+                      <th className="py-2 px-3 font-semibold text-right rounded-r-lg">Incidents</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-50">{locationTable}</tbody>
+                </table>
+              </div>
+            </div>
+          </section>
+
+          <section>
+            <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-100">
+              <div className="flex items-center gap-2 mb-4">
+                <span className="material-icons-round text-orange-500 text-lg">engineering</span>
+                <h3 className="font-bold text-slate-800">Infrastructure Insights</h3>
+              </div>
+              <div className="grid grid-cols-2 gap-6 mb-6">
+                <div>
+                  <p className="text-xs font-bold text-slate-700 uppercase mb-2">Critical Zones</p>
+                  {infrastructure?.criticalZones.length ? (
+                    <p className="text-xs text-slate-600">{infrastructure.criticalZones.slice(0, 3).join(', ')}</p>
+                  ) : (
+                    <p className="text-sm text-slate-400 italic">No critical zones</p>
+                  )}
+                </div>
+                <div>
+                  <p className="text-xs font-bold text-slate-700 uppercase mb-2">Maintenance Needed</p>
+                  {infrastructure?.maintenanceNeeded.length ? (
+                    <p className="text-xs text-slate-600">{infrastructure.maintenanceNeeded.slice(0, 3).join(', ')}</p>
+                  ) : (
+                    <p className="text-xs text-slate-500 italic">All systems operational</p>
+                  )}
+                </div>
+              </div>
+              <div className="bg-blue-50 border border-blue-100 rounded-xl p-3 text-center">
+                <span className="text-blue-700 font-bold text-sm">Average Response Time: <span className="font-medium">{infrastructure?.responseTime ?? 0} minutes</span></span>
+              </div>
+            </div>
+          </section>
+
+          <SwarmSection nodes={nodes} nodeStats={nodeStats} />
+
+          <DataExportPanel />
+
+          <footer className="text-center py-2 px-2">
+            <p className="text-[10px] text-slate-400 font-medium leading-relaxed">Copyright © 2026 FEI. Developed for V Hack 2026 - USM.</p>
+            <div className="w-24 h-1 bg-slate-200 rounded-full mx-auto mt-4"></div>
+          </footer>
+        </main>
       </div>
 
       <BottomNav activeTab="dashboard" onTabChange={onTabChange} />

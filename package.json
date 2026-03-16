@@ -4,14 +4,15 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "vite --port=5173 --host=0.0.0.0",
+    "dev": "vite --host=0.0.0.0",
     "build": "vite build",
     "preview": "vite preview",
     "serve": "vite build && firebase serve --only hosting --port 5000",
     "clean": "rm -rf dist",
     "lint": "tsc --noEmit",
     "deploy": "vite build && firebase deploy --only hosting",
-    "deploy:watch": "chokidar \"src/**/*\" \"index.html\" -c \"npm run deploy\" --debounce 3000 --initial"
+    "deploy:watch": "chokidar \"src/**/*\" \"index.html\" -c \"npm run deploy\" --debounce 3000 --initial",
+    "sync:auto": "concurrently -n LOCALHOST,WEBSITE -c cyan,magenta \"npm run dev\" \"npm run deploy:watch\""
   },
   "dependencies": {
     "@google/genai": "^1.29.0",
@@ -33,6 +34,7 @@
     "@types/node": "^22.14.0",
     "autoprefixer": "^10.4.21",
     "chokidar-cli": "^3.0.0",
+    "concurrently": "^9.1.2",
     "tailwindcss": "^4.1.14",
     "tsx": "^4.21.0",
     "typescript": "~5.8.2",

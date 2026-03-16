@@ -2,7 +2,6 @@ import { useState, useEffect, useRef } from 'react';
 import { GoogleMap, useJsApiLoader, Marker } from '@react-google-maps/api';
 import BottomNav from '../components/BottomNav';
 import { FloodAnalysisResult } from '../services/gemini';
-import { getFloodZones } from '../data/floodZones';
 
 import { isMalaysianLocation, getMalaysiaLocationWarning } from '../utils/locationValidator';
 import { officialLogos } from '../data/officialLogos';
@@ -143,51 +142,11 @@ export default function ReportScreen({ onTabChange, onScanClick, imageUri, onCle
       return;
     }
 
-    if (!searchQuery.trim() && !address.main.trim()) {
-      setMatchedZoneId(null);
-      setLocalAnalysisResult(null);
-      return;
-    }
-
-    const zones = Object.values(getFloodZones());
-    const query = searchQuery.toLowerCase().trim();
-    const addrMain = address.main.toLowerCase().trim();
-    
-    const matchedZone = zones.find(z => {
-      const zName = z.name.toLowerCase();
-      const zLoc = z.specificLocation.toLowerCase();
-      
-      if (query && (zLoc.includes(query) || zName.includes(query))) return true;
-      if (addrMain && (addrMain.includes(zLoc) || addrMain.includes(zName))) return true;
-      return false;
-    });
-
-    if (matchedZone) {
-      setMatchedZoneId(matchedZone.id);
-      const severityStr = matchedZone.severity >= 8 ? 'CRITICAL' : matchedZone.severity >= 4 ? 'MODERATE' : 'NORMAL';
-      setLocalAnalysisResult({
-        estimatedDepth: matchedZone.aiAnalysis.waterDepth,
-        detectedHazards: matchedZone.forecast,
-        passability: matchedZone.aiRecommendation.impassableRoads,
-        aiConfidence: matchedZone.aiConfidence,
-        directive: matchedZone.aiRecommendation.evacuationRoute,
-        riskScore: matchedZone.severity,
-        severity: severityStr,
-        waterDepth: matchedZone.severity >= 8 ? 'Severe (Waist-deep or higher)' : 'Normal/Minor (Ankle to knee-deep)',
-        waterCurrent: matchedZone.aiAnalysis.currentSpeed === 'rapid current' ? 'Severe (Fast-moving water)' : 'Normal (Stagnant/pooling)',
-        infrastructureStatus: matchedZone.severity >= 8 ? 'Roads blocked, structural damage possible' : 'Normal',
-        humanRisk: matchedZone.severity >= 8 ? 'High risk, evacuation needed' : 'Low risk',
-        estimatedStartTime: matchedZone.estimatedStartTime || 'Unknown',
-        estimatedEndTime: matchedZone.estimatedEndTime || 'Unknown',
-        isRelevant: true,
-        rejectionReason: '',
-        eventType: matchedZone.severity >= 8 ? 'Flash Flood' : matchedZone.severity >= 4 ? 'Monsoon Flood' : 'Normal',
-      });
-    } else {
-      setMatchedZoneId(null);
-      setLocalAnalysisResult(null);
-    }
-  }, [searchQuery, address.main, analysisResult]);
+    // Do not derive severity from static/live zones here.
+    // Report screen must reflect Gemini image analysis only.
+    setMatchedZoneId(null);
+    setLocalAnalysisResult(null);
+  }, [analysisResult, imageUri]);
 
   const toggleDept = (dept: string) => {
     setSelectedDepts(prev => 
@@ -510,7 +469,9 @@ export default function ReportScreen({ onTabChange, onScanClick, imageUri, onCle
           ) : (
             <div className="bg-slate-100 rounded-xl border border-slate-200 p-6 flex flex-col items-center justify-center text-center gap-2">
               <span className="material-icons-round text-slate-400 text-3xl">analytics</span>
-              <p className="text-sm text-slate-500 font-medium">Upload a photo above to get AI severity analysis</p>
+              <p className="text-sm text-slate-500 font-medium">
+                Upload and scan a photo to get Gemini AI severity analysis
+              </p>
             </div>
           )}
         </section>

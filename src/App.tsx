@@ -26,6 +26,7 @@ export default function App() {
   const [startMapWithScan, setStartMapWithScan] = useState(false);
   const [selectedAlertId, setSelectedAlertId] = useState<string | null>(null);
   const [selectedAlertState, setSelectedAlertState] = useState<string | null>(null);
+  const [focusedAlertZoneId, setFocusedAlertZoneId] = useState<string | null>(null);
   const [cameraOrigin, setCameraOrigin] = useState<'map' | 'report' | 'alerts' | 'alert-detail'>('map');
   const [scanLocation, setScanLocation] = useState<{ lat: number; lng: number; address: string } | null>(null);
   const [notifications, setNotifications] = useState<{ id: number; zoneId: string; zone: FloodZone }[]>([]);
@@ -43,6 +44,36 @@ export default function App() {
     return () => {
       stopContinuousMonitoring();
       console.log('⏹️ Data collection stopped');
+    };
+  }, []);
+
+  const enqueueNotification = (zoneId: string, zone: FloodZone) => {
+    setNotifications(prev => {
+      const filtered = prev.filter(
+        notification => notification.zoneId !== zoneId && notification.zone.state !== zone.state
+      );
+
+      return [
+        ...filtered,
+        {
+          id: Date.now(),
+          zoneId,
+          zone,
+        }
+      ];
+    });
+  };
+
+  useEffect(() => {
+    const handleFloodAlert = (event: Event) => {
+      const detail = (event as CustomEvent<{ zoneId?: string; zone?: FloodZone }>).detail;
+      if (!detail?.zoneId || !detail.zone) return;
+      enqueueNotification(detail.zoneId, detail.zone);
+    };
+
+    window.addEventListener('floodAlert', handleFloodAlert as EventListener);
+    return () => {
+      window.removeEventListener('floodAlert', handleFloodAlert as EventListener);
     };
   }, []);
 
@@ -77,6 +108,7 @@ export default function App() {
     if (tab === 'dashboard') setCurrentScreen('dashboard');
     if (tab === 'alert') {
       setSelectedAlertState(null); // normal tab navigation → show full list
+      setFocusedAlertZoneId(null);
       setCurrentScreen('alerts');
     }
   };
@@ -133,11 +165,7 @@ export default function App() {
           onTabChange={handleTabChange}
           zoneId={cameraOrigin === 'alert-detail' ? selectedAlertId : null}
           onUploadAlert={(zoneId, zone) => {
-            const id = Date.now();
-            setNotifications(prev => [
-              ...prev.filter(n => n.zone.state !== zone.state),
-              { id, zoneId, zone }
-            ]);
+            enqueueNotification(zoneId, zone);
           }}
         />
       )}
@@ -167,11 +195,13 @@ export default function App() {
         <AlertsScreen 
           onTabChange={handleTabChange}
           onAlertClick={(zoneId) => {
+            setFocusedAlertZoneId(zoneId);
             setSelectedAlertId(zoneId);
             setCurrentScreen('alert-detail');
           }}
           onScanClick={handleHelpCommunity}
           initialState={selectedAlertState}
+          initialZoneId={focusedAlertZoneId}
           onClearNotifications={clearNotifications}
           onNotificationsReady={addNotifications}
         />
@@ -227,14 +257,9 @@ export default function App() {
               <div key={notification.id} className="pointer-events-auto animate-[slideDown_0.3s_ease-out]">
                 <div
                   onClick={() => {
-                    // State-level live zone: open its state list. Town / user-report: open detail.
-                    if (isStateLevelZone) {
-                      setSelectedAlertState(notification.zone.state);
-                      setCurrentScreen('alerts');
-                    } else {
-                      setSelectedAlertId(notification.zoneId);
-                      setCurrentScreen('alert-detail');
-                    }
+                    setSelectedAlertState(notification.zone.state);
+                    setFocusedAlertZoneId(isStateLevelZone ? null : notification.zoneId);
+                    setCurrentScreen('alerts');
                     setNotifications(prev => prev.filter(n => n.id !== notification.id));
                   }}
                   className={`bg-white rounded-xl shadow-lg border border-slate-100 border-l-4 ${borderColor} px-3 py-2.5 cursor-pointer hover:bg-slate-50 transition-colors flex items-center gap-3`}

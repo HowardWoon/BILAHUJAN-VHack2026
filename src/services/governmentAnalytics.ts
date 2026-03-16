@@ -47,6 +47,54 @@ export interface InfrastructureInsights {
   responseTime: number; // minutes
 }
 
+const MALAYSIA_STATES = [
+  'Johor',
+  'Kedah',
+  'Kelantan',
+  'Melaka',
+  'Negeri Sembilan',
+  'Pahang',
+  'Perak',
+  'Perlis',
+  'Pulau Pinang',
+  'Sabah',
+  'Sarawak',
+  'Selangor',
+  'Terengganu',
+  'Kuala Lumpur',
+  'Labuan',
+  'Putrajaya'
+] as const;
+
+const STATE_ALIASES: Record<string, string> = {
+  penang: 'Pulau Pinang',
+  'pulau pinang': 'Pulau Pinang',
+  melaka: 'Melaka',
+  malacca: 'Melaka',
+  'negeri sembilan': 'Negeri Sembilan',
+  kl: 'Kuala Lumpur',
+  'kuala lumpur': 'Kuala Lumpur',
+  'wp kuala lumpur': 'Kuala Lumpur',
+  'w.p. kuala lumpur': 'Kuala Lumpur',
+  'federal territory of kuala lumpur': 'Kuala Lumpur',
+  labuan: 'Labuan',
+  'wp labuan': 'Labuan',
+  'w.p. labuan': 'Labuan',
+  putrajaya: 'Putrajaya',
+  'wp putrajaya': 'Putrajaya',
+  'w.p. putrajaya': 'Putrajaya'
+};
+
+const normalizeState = (value: string | undefined): string => {
+  const raw = (value || '').trim();
+  if (!raw) return 'Unknown';
+  const alias = STATE_ALIASES[raw.toLowerCase()];
+  if (alias) return alias;
+  return raw;
+};
+
+const isRealtimeZone = (zone: any) => !zone?.isHistorical && zone?.status !== 'resolved';
+
 /**
  * Get aggregated flood statistics for a date range
  */
@@ -100,53 +148,102 @@ export const getLocationAnalytics = async (): Promise<LocationAnalytics[]> => {
     const zonesRef = ref(rtdb, 'liveZones');
     const snapshot = await get(zonesRef);
 
-    if (!snapshot.exists()) return [];
-
-    const zones = snapshot.val();
-    const locationMap: Record<string, {
+    const stateMap: Record<string, {
       incidentCount: number;
       totalSeverity: number;
       totalWaterLevel: number;
       totalDrainage: number;
       lastIncident: number;
-      state: string;
+      hotspots: Record<string, number>;
     }> = {};
 
+    MALAYSIA_STATES.forEach((state) => {
+      stateMap[state] = {
+        incidentCount: 0,
+        totalSeverity: 0,
+        totalWaterLevel: 0,
+        totalDrainage: 0,
+        lastIncident: 0,
+        hotspots: {}
+      };
+    });
+
+    if (!snapshot.exists()) {
+      return MALAYSIA_STATES.map((state) => ({
+        location: '—',
+        state,
+        incidentCount: 0,
+        avgSeverity: 0,
+        avgWaterLevel: 0,
+        avgDrainageBlockage: 0,
+        lastIncident: new Date(0)
+      }));
+    }
+
+    const zones = snapshot.val();
+
     Object.values(zones).forEach((zone: any) => {
-      const key = zone.name;
-      if (!locationMap[key]) {
-        locationMap[key] = {
+      if (!isRealtimeZone(zone)) return;
+
+      const normalizedState = normalizeState(zone.state);
+      const stateKey = MALAYSIA_STATES.includes(normalizedState as (typeof MALAYSIA_STATES)[number])
+        ? normalizedState
+        : 'Unknown';
+
+      if (!stateMap[stateKey]) {
+        stateMap[stateKey] = {
           incidentCount: 0,
           totalSeverity: 0,
           totalWaterLevel: 0,
           totalDrainage: 0,
           lastIncident: 0,
-          state: zone.state || 'Unknown'
+          hotspots: {}
         };
       }
 
-      locationMap[key].incidentCount++;
-      locationMap[key].totalSeverity += zone.severity || 0;
-      locationMap[key].totalWaterLevel += zone.severity >= 8 ? 80 : zone.severity >= 4 ? 50 : 20;
-      locationMap[key].totalDrainage += zone.drainageBlockage || 0;
-      locationMap[key].lastIncident = Math.max(
-        locationMap[key].lastIncident,
+      stateMap[stateKey].incidentCount++;
+      stateMap[stateKey].totalSeverity += zone.severity || 0;
+      stateMap[stateKey].totalWaterLevel += zone.severity >= 8 ? 80 : zone.severity >= 4 ? 50 : 20;
+      stateMap[stateKey].totalDrainage += zone.drainageBlockage || 0;
+      stateMap[stateKey].lastIncident = Math.max(
+        stateMap[stateKey].lastIncident,
         new Date(zone.timestamp || Date.now()).getTime()
       );
+
+      const hotspot = (zone.name || '').trim();
+      if (hotspot) {
+        stateMap[stateKey].hotspots[hotspot] = (stateMap[stateKey].hotspots[hotspot] || 0) + 1;
+      }
     });
 
-    return Object.entries(locationMap).map(([location, data]) => ({
-      location,
-      state: data.state,
-      incidentCount: data.incidentCount,
-      avgSeverity: data.totalSeverity / data.incidentCount,
-      avgWaterLevel: data.totalWaterLevel / data.incidentCount,
-      avgDrainageBlockage: data.totalDrainage / data.incidentCount,
-      lastIncident: new Date(data.lastIncident)
-    }));
+    return MALAYSIA_STATES.map((state) => {
+      const data = stateMap[state];
+      const topHotspot = Object.entries(data.hotspots)
+        .sort((a, b) => b[1] - a[1])[0]?.[0] || '—';
+      const location = topHotspot.toLowerCase() === state.toLowerCase() ? '—' : topHotspot;
+      const count = data.incidentCount;
+
+      return {
+        location,
+        state,
+        incidentCount: count,
+        avgSeverity: count > 0 ? data.totalSeverity / count : 0,
+        avgWaterLevel: count > 0 ? data.totalWaterLevel / count : 0,
+        avgDrainageBlockage: count > 0 ? data.totalDrainage / count : 0,
+        lastIncident: new Date(data.lastIncident || 0)
+      };
+    });
   } catch (error) {
     console.error('Error getting location analytics:', error);
-    return [];
+    return MALAYSIA_STATES.map((state) => ({
+      location: '—',
+      state,
+      incidentCount: 0,
+      avgSeverity: 0,
+      avgWaterLevel: 0,
+      avgDrainageBlockage: 0,
+      lastIncident: new Date(0)
+    }));
   }
 };
 
@@ -233,7 +330,16 @@ export const getInfrastructureInsights = async (): Promise<InfrastructureInsight
       };
     }
 
-    const zones = Object.values(snapshot.val()) as any[];
+    const zones = (Object.values(snapshot.val()) as any[]).filter(isRealtimeZone);
+
+    if (zones.length === 0) {
+      return {
+        drainageEfficiency: 0,
+        criticalZones: [],
+        maintenanceNeeded: [],
+        responseTime: 0
+      };
+    }
     
     const totalDrainage = zones.reduce((sum, z) => sum + (z.drainageBlockage || 0), 0);
     const drainageEfficiency = 100 - (totalDrainage / zones.length);

@@ -1,19 +1,110 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import StatusBar from '../components/StatusBar';
 import BottomNav from '../components/BottomNav';
 import { FloodZone, addFloodZone, createZone, getFloodZones, reconcileStateSeverity, useFloodZones } from '../data/floodZones';
 import { fetchLiveWeatherAndCCTV, fetchStateTownsWithWeather } from '../services/gemini';
+import { ref, onValue } from 'firebase/database';
+import { rtdb } from '../firebase';
+
+const MALAYSIA_STATES = [
+  { name: 'Selangor', region: 'Central Region' },
+  { name: 'Kuala Lumpur', region: 'Federal Territory' },
+  { name: 'Johor', region: 'Southern Region' },
+  { name: 'Penang', region: 'Northern Region' },
+  { name: 'Pahang', region: 'East Coast' },
+  { name: 'Sarawak', region: 'East Malaysia' },
+  { name: 'Sabah', region: 'East Malaysia' },
+  { name: 'Perak', region: 'Northern Region' },
+  { name: 'Kedah', region: 'Northern Region' },
+  { name: 'Kelantan', region: 'East Coast' },
+  { name: 'Terengganu', region: 'East Coast' },
+  { name: 'Negeri Sembilan', region: 'Central Region' },
+  { name: 'Melaka', region: 'Southern Region' },
+  { name: 'Perlis', region: 'Northern Region' },
+  { name: 'Putrajaya', region: 'Federal Territory' },
+  { name: 'Labuan', region: 'Federal Territory' }
+];
+
+const isRealtimeZone = (zone: any) => !zone?.isHistorical && zone?.status !== 'resolved';
+
+const getZoneTimestamp = (zone: any) => {
+  if (!zone) return 0;
+  if (typeof zone.timestamp === 'number' && Number.isFinite(zone.timestamp)) return zone.timestamp;
+
+  const parsed = Date.parse(zone.lastUpdated || zone.reportedAt || '');
+  return Number.isFinite(parsed) ? parsed : 0;
+};
+
+const formatRelativeUpdateTime = (timestamp: number) => {
+  if (!timestamp) return 'Last updated just now';
+
+  const diffMs = Math.max(0, Date.now() - timestamp);
+  const diffMinutes = Math.floor(diffMs / 60000);
+
+  if (diffMinutes <= 1) return 'Last updated just now';
+  if (diffMinutes < 60) return `Last updated ${diffMinutes} min ago`;
+
+  const diffHours = Math.floor(diffMinutes / 60);
+  if (diffHours < 24) return `Last updated ${diffHours} hr ago`;
+
+  const diffDays = Math.floor(diffHours / 24);
+  return `Last updated ${diffDays} day${diffDays > 1 ? 's' : ''} ago`;
+};
+
+function getStateSeverity(
+  stateName: string,
+  liveZones: Record<string, any>
+): { severity: number; zoneName: string; count: number; lastUpdatedLabel: string } {
+  const stateZones = Object.values(liveZones).filter(
+    (zone: any) =>
+      isRealtimeZone(zone) && (
+      zone.state?.toLowerCase() === stateName.toLowerCase() ||
+      zone.name?.toLowerCase().includes(stateName.toLowerCase())
+      )
+  );
+
+  if (stateZones.length === 0) {
+    return { severity: 0, zoneName: '', count: 0, lastUpdatedLabel: 'Waiting for live update' };
+  }
+
+  const liveStateZone = stateZones.find((zone: any) => zone.id?.startsWith('live_') && !zone.id?.startsWith('live_town_'));
+  const userZones = stateZones.filter((zone: any) => zone.id?.startsWith('user_reported_'));
+  const userMaxSeverity = userZones.reduce((max: number, zone: any) => Math.max(max, zone.severity || 0), 0);
+  const liveSeverity = liveStateZone?.severity || 0;
+  const isRaining = liveStateZone?.eventType === 'Heavy Rain' || (liveStateZone?.rainfall ?? 0) > 0;
+  const effectiveSeverity = reconcileStateSeverity(liveSeverity, userMaxSeverity, isRaining, userZones.length);
+
+  const highest = stateZones.reduce((max: any, zone: any) =>
+    (zone.severity || 0) > (max.severity || 0) ? zone : max,
+  stateZones[0]);
+
+  const displayZone = userMaxSeverity >= liveSeverity && userZones.length > 0
+    ? userZones.reduce((max: any, zone: any) => (zone.severity || 0) > (max.severity || 0) ? zone : max, userZones[0])
+    : highest;
+
+  const freshestTimestamp = stateZones.reduce((max: number, zone: any) => {
+    return Math.max(max, getZoneTimestamp(zone));
+  }, 0);
+
+  return {
+    severity: effectiveSeverity || highest.severity || 0,
+    zoneName: displayZone?.name || stateName,
+    count: stateZones.length,
+    lastUpdatedLabel: formatRelativeUpdateTime(freshestTimestamp)
+  };
+}
 
 interface AlertsScreenProps {
   onTabChange: (tab: 'map' | 'report' | 'alert' | 'dashboard') => void;
   onAlertClick: (zoneId: string) => void;
   onScanClick: () => void;
   initialState?: string | null;
+  initialZoneId?: string | null;
   onClearNotifications: () => void;
   onNotificationsReady: (items: { zoneId: string; zone: FloodZone }[]) => void;
 }
 
-export default function AlertsScreen({ onTabChange, onAlertClick, onScanClick, initialState, onClearNotifications, onNotificationsReady }: AlertsScreenProps) {
+export default function AlertsScreen({ onTabChange, onAlertClick, onScanClick, initialState, initialZoneId, onClearNotifications, onNotificationsReady }: AlertsScreenProps) {
   const allZones = useFloodZones();
   
   const zones = useMemo(() => {
@@ -21,6 +112,9 @@ export default function AlertsScreen({ onTabChange, onAlertClick, onScanClick, i
     const filtered: Record<string, FloodZone> = {};
     Object.entries(allZones).forEach(([id, zone]) => {
       const floodZone = zone as FloodZone;
+      if ((zone as any).isHistorical || (zone as any).status === 'resolved') {
+        return;
+      }
       if (floodZone.estimatedEndTime && floodZone.estimatedEndTime !== 'N/A' && floodZone.estimatedEndTime !== 'Unknown') {
         const endTime = new Date(floodZone.estimatedEndTime);
         // Only filter out if it's a valid date and it's in the past
@@ -39,6 +133,40 @@ export default function AlertsScreen({ onTabChange, onAlertClick, onScanClick, i
   const [selectedState, setSelectedState] = useState<string | null>(initialState ?? null);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [refreshStatus, setRefreshStatus] = useState<string | null>(null);
+  const [liveZoneData, setLiveZoneData] = useState<Record<string, any>>({});
+
+  useEffect(() => {
+    setSelectedState(initialState ?? null);
+  }, [initialState]);
+
+  useEffect(() => {
+    if (!selectedState || !initialZoneId) return;
+
+    const frameId = window.requestAnimationFrame(() => {
+      const target = document.getElementById(`alert-zone-${initialZoneId}`);
+      if (target) {
+        target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+    });
+
+    return () => window.cancelAnimationFrame(frameId);
+  }, [initialZoneId, selectedState, zones]);
+
+  useEffect(() => {
+    const zonesRef = ref(rtdb, 'liveZones');
+    const unsubscribe = onValue(zonesRef, (snapshot) => {
+      if (snapshot.exists()) {
+        const raw = snapshot.val() as Record<string, any>;
+        const filtered = Object.fromEntries(
+          Object.entries(raw).filter(([, zone]) => isRealtimeZone(zone))
+        );
+        setLiveZoneData(filtered);
+      } else {
+        setLiveZoneData({});
+      }
+    });
+    return () => unsubscribe();
+  }, []);
 
   const handleRefreshLiveData = async () => {
     if (isRefreshing) return;
@@ -179,27 +307,7 @@ export default function AlertsScreen({ onTabChange, onAlertClick, onScanClick, i
   const stateGroups = useMemo(() => {
     const groups: Record<string, { region: string, zones: FloodZone[], maxSeverity: number, activeReports: number }> = {};
     
-    // Initialize all states to ensure they appear even if empty
-    const allStates = [
-      { name: 'Selangor', region: 'Central Region' },
-      { name: 'Kuala Lumpur', region: 'Federal Territory' },
-      { name: 'Johor', region: 'Southern Region' },
-      { name: 'Penang', region: 'Northern Region' },
-      { name: 'Pahang', region: 'East Coast' },
-      { name: 'Sarawak', region: 'East Malaysia' },
-      { name: 'Sabah', region: 'East Malaysia' },
-      { name: 'Perak', region: 'Northern Region' },
-      { name: 'Kedah', region: 'Northern Region' },
-      { name: 'Kelantan', region: 'East Coast' },
-      { name: 'Terengganu', region: 'East Coast' },
-      { name: 'Negeri Sembilan', region: 'Central Region' },
-      { name: 'Melaka', region: 'Southern Region' },
-      { name: 'Perlis', region: 'Northern Region' },
-      { name: 'Putrajaya', region: 'Federal Territory' },
-      { name: 'Labuan', region: 'Federal Territory' }
-    ];
-
-    allStates.forEach(state => {
+    MALAYSIA_STATES.forEach(state => {
       groups[state.name] = {
         region: state.region,
         zones: [],
@@ -261,64 +369,73 @@ export default function AlertsScreen({ onTabChange, onAlertClick, onScanClick, i
       )}
 
       <div className="space-y-4">
-        {stateGroups.map(([stateName, data]) => {
-          let borderColor = 'border-l-slate-400';
-          let badgeBg = 'bg-white';
-          let badgeText = 'text-green-600';
-          let badgeIcon = 'check_circle';
-          let badgeLabel = 'CLEAR';
-          let reportText = 'No active alerts';
-
-          if (data.maxSeverity >= 8) {
-            borderColor = 'border-l-[#EF4444]';
-            badgeBg = 'bg-[#EF4444]';
-            badgeText = 'text-white';
-            badgeIcon = 'warning';
-            badgeLabel = 'FLOOD NOW';
-            reportText = `${data.activeReports} active reports`;
-          } else if (data.maxSeverity >= 4) {
-            borderColor = 'border-l-[#F59E0B]';
-            badgeBg = 'bg-[#F59E0B]';
-            badgeText = 'text-white';
-            badgeIcon = 'waves';
-            badgeLabel = 'RISING WATER';
-            reportText = `${data.activeReports} monitoring stations active`;
-          }
+        {MALAYSIA_STATES.map(({ name: stateName, region }) => {
+          const stateInfo = getStateSeverity(stateName, liveZoneData);
+          const isFlood = stateInfo.severity >= 4;
+          const isSevere = stateInfo.severity >= 7;
+          const isCritical = stateInfo.severity >= 9;
+          const titleColor = isCritical || isSevere ? 'text-white' : isFlood ? 'text-orange-900' : 'text-green-900';
+          const regionColor = isCritical || isSevere ? 'text-red-100' : isFlood ? 'text-orange-700' : 'text-green-700';
+          const zoneColor = isCritical || isSevere ? 'text-red-100' : isFlood ? 'text-orange-800' : 'text-green-800';
+          const metaColor = isCritical || isSevere ? 'text-red-100/90' : isFlood ? 'text-orange-700/90' : 'text-green-700/90';
 
           return (
-            <div 
+            <div
               key={stateName}
               onClick={() => setSelectedState(stateName)}
-              className={`bg-[#1A202C] rounded-xl overflow-hidden cursor-pointer hover:bg-[#2D3748] transition-colors border-l-4 ${borderColor}`}
+              className={`rounded-2xl p-4 mb-3 transition-all cursor-pointer hover:brightness-105 ${
+                isCritical ? 'bg-red-950 border border-red-800' :
+                isSevere ? 'bg-red-800 border border-red-700' :
+                isFlood ? 'bg-orange-100 border border-orange-500' :
+                stateInfo.severity > 0 ? 'bg-emerald-100 border border-emerald-500' :
+                'bg-green-100 border border-green-500'
+              }`}
             >
-              <div className="p-5">
-                <div className="flex justify-between items-start mb-4">
-                  <div>
-                    <h3 className="text-white font-bold text-xl mb-1">{stateName}</h3>
-                    <p className="text-slate-400 text-sm">{data.region}</p>
-                  </div>
-                  <div className={`${badgeBg} ${badgeText} px-3 py-1 rounded-full flex items-center gap-1 shadow-sm`}>
-                    <span className="material-icons-round text-[14px]">{badgeIcon}</span>
-                    <span className="text-[10px] font-bold uppercase tracking-wider">{badgeLabel}</span>
-                  </div>
+              <div className="flex justify-between items-start mb-2">
+                <div>
+                  <h3 className={`${titleColor} font-bold text-xl mb-1`}>{stateName}</h3>
+                  <p className={`${regionColor} text-sm`}>{region}</p>
                 </div>
-                
-                <div className="flex items-center gap-3">
-                  {data.maxSeverity >= 4 && (
-                    <div className="flex -space-x-2">
-                      <div className="w-8 h-8 rounded-full bg-blue-500 border-2 border-[#1A202C] flex items-center justify-center z-10">
-                        <span className="material-icons-round text-white text-[14px]">water_drop</span>
-                      </div>
-                      {data.maxSeverity >= 8 && (
-                        <div className="w-8 h-8 rounded-full bg-red-500 border-2 border-[#1A202C] flex items-center justify-center z-0">
-                          <span className="material-icons-round text-white text-[14px]">error</span>
-                        </div>
-                      )}
-                    </div>
-                  )}
-                  <p className="text-slate-300 text-sm">{reportText}</p>
-                </div>
+
+                {stateInfo.severity === 0 ? (
+                  <span className="flex items-center gap-1 px-3 py-1 bg-green-500 text-white text-xs font-bold rounded-full">
+                    <span className="material-icons-round text-sm">check_circle</span>
+                    CLEAR
+                  </span>
+                ) : isCritical ? (
+                  <span className="flex items-center gap-1 px-3 py-1 bg-red-600 text-white text-xs font-bold rounded-full animate-pulse">
+                    🆘 CRITICAL
+                  </span>
+                ) : isSevere ? (
+                  <span className="flex items-center gap-1 px-3 py-1 bg-red-500 text-white text-xs font-bold rounded-full">
+                    🔴 SEVERE
+                  </span>
+                ) : isFlood ? (
+                  <span className="flex items-center gap-1 px-3 py-1 bg-orange-500 text-white text-xs font-bold rounded-full">
+                    🟠 FLOOD
+                  </span>
+                ) : (
+                  <span className="flex items-center gap-1 px-3 py-1 bg-emerald-500 text-white text-xs font-bold rounded-full">
+                    🟡 WATCH
+                  </span>
+                )}
               </div>
+
+              {stateInfo.severity === 0 ? (
+                <p className="text-gray-400 text-sm">No active alerts</p>
+              ) : (
+                <div>
+                  <p className={`text-sm font-medium ${zoneColor}`}>
+                    {stateInfo.zoneName}
+                  </p>
+                  <p className={`${metaColor} text-xs mt-0.5`}>
+                    Severity {stateInfo.severity}/10 · {stateInfo.count} active zone{stateInfo.count > 1 ? 's' : ''}
+                  </p>
+                  <p className={`${metaColor} text-[11px] mt-1 font-medium`}>
+                    {stateInfo.lastUpdatedLabel}
+                  </p>
+                </div>
+              )}
             </div>
           );
         })}
@@ -450,6 +567,7 @@ export default function AlertsScreen({ onTabChange, onAlertClick, onScanClick, i
                 // user-reported and town zones keep their own raw severity.
                 const isStateLevelLive = zone.id.startsWith('live_') && !zone.id.startsWith('live_town_');
                 const displaySeverity = isStateLevelLive ? reconciledLiveSev : zone.severity;
+                const isFocusedZone = zone.id === initialZoneId;
 
                 let headerBgColor = 'bg-slate-100';
                 let headerBorderColor = 'border-slate-200';
@@ -477,12 +595,18 @@ export default function AlertsScreen({ onTabChange, onAlertClick, onScanClick, i
 
               return (
                 <div 
+                  id={`alert-zone-${zone.id}`}
                   key={zone.id}
                   onClick={() => onAlertClick(zone.id)}
-                  className="bg-white rounded-2xl overflow-hidden shadow-sm border border-slate-100 cursor-pointer hover:shadow-md transition-shadow"
+                  className={`bg-white rounded-2xl overflow-hidden shadow-sm border cursor-pointer transition-all ${isFocusedZone ? 'border-[#635BFF] ring-2 ring-[#635BFF]/20 shadow-md' : 'border-slate-100 hover:shadow-md'}`}
                 >
                   <div className={`${headerBgColor} px-4 py-2 border-b ${headerBorderColor}`}>
-                    <span className={`${headerTextColor} text-xs font-bold uppercase tracking-wider`}>{headerText}</span>
+                    <div className="flex items-center justify-between gap-2">
+                      <span className={`${headerTextColor} text-xs font-bold uppercase tracking-wider`}>{headerText}</span>
+                      {isFocusedZone && (
+                        <span className="text-[10px] font-bold uppercase tracking-wider text-[#635BFF]">Uploaded Analysis</span>
+                      )}
+                    </div>
                   </div>
                   <div className="p-4">
                     <div className="flex justify-between items-start mb-1">

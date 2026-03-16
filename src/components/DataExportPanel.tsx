@@ -18,6 +18,8 @@ export const DataExportPanel: FC = () => {
   );
   const [loading, setLoading] = useState(false);
   const [exportStatus, setExportStatus] = useState<string>('');
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [pendingFormat, setPendingFormat] = useState<'json' | 'csv' | null>(null);
 
   const handleExportJSON = async () => {
     setLoading(true);
@@ -77,6 +79,28 @@ export const DataExportPanel: FC = () => {
     }
   };
 
+  const openConfirmation = (format: 'json' | 'csv') => {
+    if (loading) return;
+    setPendingFormat(format);
+    setConfirmOpen(true);
+  };
+
+  const closeConfirmation = () => {
+    if (loading) return;
+    setConfirmOpen(false);
+    setPendingFormat(null);
+  };
+
+  const confirmExport = async () => {
+    if (!pendingFormat) return;
+    setConfirmOpen(false);
+    if (pendingFormat === 'json') {
+      await handleExportJSON();
+      return;
+    }
+    await handleExportCSV();
+  };
+
   return (
     <div className="bg-white rounded-lg shadow-md p-6">
       <h2 className="text-2xl font-bold text-gray-800 mb-4 flex items-center gap-2">
@@ -116,7 +140,7 @@ export const DataExportPanel: FC = () => {
         {/* Export Buttons */}
         <div className="flex flex-col sm:flex-row gap-3">
           <button
-            onClick={handleExportJSON}
+            onClick={() => openConfirmation('json')}
             disabled={loading}
             className="flex-1 bg-blue-500 hover:bg-blue-600 text-white font-medium py-3 px-6 rounded-lg flex items-center justify-center gap-2 transition-colors disabled:bg-gray-400 disabled:cursor-not-allowed"
           >
@@ -125,7 +149,7 @@ export const DataExportPanel: FC = () => {
           </button>
 
           <button
-            onClick={handleExportCSV}
+            onClick={() => openConfirmation('csv')}
             disabled={loading}
             className="flex-1 bg-green-500 hover:bg-green-600 text-white font-medium py-3 px-6 rounded-lg flex items-center justify-center gap-2 transition-colors disabled:bg-gray-400 disabled:cursor-not-allowed"
           >
@@ -174,6 +198,55 @@ export const DataExportPanel: FC = () => {
           </ul>
         </div>
       </div>
+
+      {confirmOpen && (
+        <div className="fixed inset-0 z-[120] bg-black/40 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="w-full max-w-sm bg-white rounded-[2rem] overflow-hidden shadow-2xl">
+            <div className="bg-[#0f172a] px-6 py-8 relative">
+              <div
+                className="absolute inset-0 opacity-20 pointer-events-none"
+                style={{
+                  backgroundImage: 'radial-gradient(#ffffff 1px, transparent 1px)',
+                  backgroundSize: '16px 16px'
+                }}
+              ></div>
+              <div className="relative z-10 flex flex-col items-center">
+                <div className="w-14 h-14 rounded-2xl bg-blue-600/20 border border-blue-400/30 flex items-center justify-center mb-5">
+                  <span className="material-icons-round text-blue-300">file_download</span>
+                </div>
+                <h3 className="text-white text-3xl font-extrabold tracking-tight text-center">Confirm Data Export</h3>
+              </div>
+            </div>
+
+            <div className="px-8 py-8">
+              <p className="text-center text-slate-600 text-[28px] leading-relaxed mb-6">
+                You are about to export anonymized flood monitoring data for the selected period.
+              </p>
+
+              <div className="bg-blue-50 border border-blue-100 rounded-2xl p-5 mb-6">
+                <p className="text-blue-700 font-bold text-lg leading-relaxed text-center">
+                  This data is privacy-compliant and secured for government use.
+                </p>
+              </div>
+
+              <div className="space-y-4">
+                <button
+                  onClick={confirmExport}
+                  className="w-full bg-blue-600 hover:bg-blue-700 text-white py-4 rounded-2xl font-bold text-2xl shadow-lg shadow-blue-200/60 transition-all active:scale-95"
+                >
+                  Confirm Export
+                </button>
+                <button
+                  onClick={closeConfirmation}
+                  className="w-full bg-slate-100 hover:bg-slate-200 text-slate-600 py-4 rounded-2xl font-bold text-2xl transition-all active:scale-95"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

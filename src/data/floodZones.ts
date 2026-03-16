@@ -254,6 +254,10 @@ export const updateFloodZone = (id: string, updates: Partial<FloodZone>) => {
 };
 
 export const addFloodZone = (zone: FloodZone) => {
+  if (!floodZonesCache) {
+    getFloodZones();
+  }
+
   if (floodZonesCache) {
     // Find if a zone with the same ID or same name+state already exists
     const normName = (n: string) => n.replace(/\s*\(.*?\)\s*/g, '').trim().toLowerCase();
@@ -327,10 +331,13 @@ export const useFloodZones = () => {
     const liveZonesRef = ref(rtdb, 'liveZones');
     const unsubscribeFirebase = onValue(liveZonesRef, (snapshot) => {
       if (snapshot.exists()) {
-        const rawFirebaseZones = snapshot.val() as Record<string, FloodZone>;
+        const rawFirebaseZones = snapshot.val() as Record<string, FloodZone & { isHistorical?: boolean; status?: string }>;
         // Strip parentheticals like "(Default)" from zone names for clean display
         const firebaseZones: Record<string, FloodZone> = {};
         for (const [id, zone] of Object.entries(rawFirebaseZones)) {
+          if ((zone as any).isHistorical || (zone as any).status === 'resolved') {
+            continue;
+          }
           firebaseZones[id] = {
             ...zone,
             name: zone.name.replace(/\s*\(.*?\)\s*/g, '').trim() || zone.name
