@@ -1,10 +1,17 @@
 import { useState, useEffect } from 'react';
 import { saveFloodZone } from '../services/dataCollection';
-import { ref, onValue, remove, get } from 'firebase/database';
+import { ref, onValue, remove, get, set } from 'firebase/database';
 import { rtdb } from '../firebase';
+import { MALAYSIA_TOWNS, normalizeStateName, normalizeToTownState } from '../utils/floodCalculations';
 
 export interface FloodZone {
   id: string;
+  locationName?: string;
+  isWeatherFallbackZone?: boolean;
+  reportId?: string | null;
+  source?: string;
+  uploadedAt?: number;
+  timestamp?: number;
   name: string;
   specificLocation: string;
   state: string;
@@ -322,6 +329,230 @@ export const reconcileStateSeverity = (
 
 let floodZonesCache: Record<string, FloodZone> | null = null;
 
+type SeedTown = { name: string; lat: number; lng: number };
+
+const SEEDED_TOWNS_BY_STATE: Record<string, SeedTown[]> = {
+  Johor: [
+    { name: 'Johor Bahru', lat: 1.4927, lng: 103.7414 },
+    { name: 'Batu Pahat', lat: 1.8548, lng: 102.9325 },
+    { name: 'Muar', lat: 2.0451, lng: 102.5689 },
+    { name: 'Kluang', lat: 2.0305, lng: 103.3169 },
+    { name: 'Segamat', lat: 2.5147, lng: 102.8158 },
+    { name: 'Mersing', lat: 2.4312, lng: 103.8360 },
+    { name: 'Pontian', lat: 1.4862, lng: 103.3897 },
+    { name: 'Kota Tinggi', lat: 1.7381, lng: 103.8999 }
+  ],
+  Kedah: [
+    { name: 'Alor Setar', lat: 6.1248, lng: 100.3678 },
+    { name: 'Sungai Petani', lat: 5.6470, lng: 100.4877 },
+    { name: 'Kulim', lat: 5.3649, lng: 100.5618 },
+    { name: 'Langkawi', lat: 6.3500, lng: 99.8000 },
+    { name: 'Baling', lat: 5.6750, lng: 100.9170 },
+    { name: 'Kubang Pasu', lat: 6.4210, lng: 100.4300 }
+  ],
+  Kelantan: [
+    { name: 'Kota Bharu', lat: 6.1254, lng: 102.2381 },
+    { name: 'Tanah Merah', lat: 5.8056, lng: 102.1494 },
+    { name: 'Pasir Mas', lat: 6.0437, lng: 102.1399 },
+    { name: 'Gua Musang', lat: 4.8840, lng: 101.9682 },
+    { name: 'Kuala Krai', lat: 5.5316, lng: 102.2050 }
+  ],
+  Melaka: [
+    { name: 'Melaka City', lat: 2.1896, lng: 102.2501 },
+    { name: 'Alor Gajah', lat: 2.3804, lng: 102.2089 },
+    { name: 'Jasin', lat: 2.3098, lng: 102.4284 },
+    { name: 'Masjid Tanah', lat: 2.3500, lng: 102.1167 }
+  ],
+  'Negeri Sembilan': [
+    { name: 'Seremban', lat: 2.7297, lng: 101.9381 },
+    { name: 'Port Dickson', lat: 2.5228, lng: 101.7954 },
+    { name: 'Nilai', lat: 2.8167, lng: 101.8000 },
+    { name: 'Rembau', lat: 2.6000, lng: 102.0833 },
+    { name: 'Tampin', lat: 2.4667, lng: 102.2333 }
+  ],
+  Pahang: [
+    { name: 'Kuantan', lat: 3.8077, lng: 103.3260 },
+    { name: 'Temerloh', lat: 3.4500, lng: 102.4167 },
+    { name: 'Bentong', lat: 3.5233, lng: 101.9092 },
+    { name: 'Raub', lat: 3.7927, lng: 101.8570 },
+    { name: 'Pekan', lat: 3.4833, lng: 103.3833 },
+    { name: 'Jerantut', lat: 3.9360, lng: 102.3636 },
+    { name: 'Cameron Highlands', lat: 4.4699, lng: 101.3763 }
+  ],
+  Penang: [
+    { name: 'George Town', lat: 5.4141, lng: 100.3288 },
+    { name: 'Butterworth', lat: 5.3997, lng: 100.3632 },
+    { name: 'Bayan Lepas', lat: 5.2872, lng: 100.2658 },
+    { name: 'Balik Pulau', lat: 5.3500, lng: 100.2333 },
+    { name: 'Nibong Tebal', lat: 5.1667, lng: 100.4833 }
+  ],
+  Perak: [
+    { name: 'Ipoh', lat: 4.5975, lng: 101.0901 },
+    { name: 'Taiping', lat: 4.8540, lng: 100.7403 },
+    { name: 'Teluk Intan', lat: 3.9530, lng: 101.0313 },
+    { name: 'Lumut', lat: 4.2323, lng: 100.6297 },
+    { name: 'Manjung', lat: 4.2100, lng: 100.6700 },
+    { name: 'Kuala Kangsar', lat: 4.7667, lng: 100.9333 }
+  ],
+  Perlis: [
+    { name: 'Kangar', lat: 6.4414, lng: 100.1986 },
+    { name: 'Arau', lat: 6.4333, lng: 100.2667 },
+    { name: 'Padang Besar', lat: 6.6648, lng: 100.3212 }
+  ],
+  Sabah: [
+    { name: 'Kota Kinabalu', lat: 5.9804, lng: 116.0735 },
+    { name: 'Sandakan', lat: 5.8394, lng: 118.1179 },
+    { name: 'Tawau', lat: 4.2448, lng: 117.8912 },
+    { name: 'Lahad Datu', lat: 5.0229, lng: 118.3274 },
+    { name: 'Keningau', lat: 5.3378, lng: 116.1602 }
+  ],
+  Sarawak: [
+    { name: 'Kuching', lat: 1.5533, lng: 110.3592 },
+    { name: 'Miri', lat: 4.3995, lng: 113.9914 },
+    { name: 'Sibu', lat: 2.2892, lng: 111.8300 },
+    { name: 'Bintulu', lat: 3.1712, lng: 113.0410 },
+    { name: 'Limbang', lat: 4.7500, lng: 115.0000 },
+    { name: 'Sri Aman', lat: 1.2472, lng: 111.4620 }
+  ],
+  Selangor: [
+    { name: 'Shah Alam', lat: 3.0733, lng: 101.5185 },
+    { name: 'Petaling Jaya', lat: 3.1073, lng: 101.6067 },
+    { name: 'Klang', lat: 3.0333, lng: 101.4500 },
+    { name: 'Subang Jaya', lat: 3.0433, lng: 101.5807 },
+    { name: 'Sepang', lat: 2.6931, lng: 101.7498 },
+    { name: 'Rawang', lat: 3.3213, lng: 101.5767 },
+    { name: 'Ampang', lat: 3.1500, lng: 101.7667 }
+  ],
+  Terengganu: [
+    { name: 'Kuala Terengganu', lat: 5.3296, lng: 103.1370 },
+    { name: 'Kemaman', lat: 4.2333, lng: 103.4333 },
+    { name: 'Dungun', lat: 4.7500, lng: 103.4167 },
+    { name: 'Besut', lat: 5.8333, lng: 102.5500 },
+    { name: 'Hulu Terengganu', lat: 5.1000, lng: 102.9833 }
+  ],
+  'Kuala Lumpur': [
+    { name: 'Chow Kit', lat: 3.1610, lng: 101.6990 },
+    { name: 'Titiwangsa', lat: 3.1730, lng: 101.6960 },
+    { name: 'Kepong', lat: 3.2130, lng: 101.6370 },
+    { name: 'Bangsar', lat: 3.1270, lng: 101.6790 },
+    { name: 'Bukit Jalil', lat: 3.0560, lng: 101.6920 },
+    { name: 'Wangsa Maju', lat: 3.2040, lng: 101.7350 }
+  ],
+  Putrajaya: [{ name: 'Putrajaya', lat: 2.9264, lng: 101.6964 }],
+  Labuan: [{ name: 'Labuan Town', lat: 5.2803, lng: 115.2475 }]
+};
+
+const STATE_REGION_MAP: Record<string, string> = {
+  Johor: 'Southern Region',
+  Kedah: 'Northern Region',
+  Kelantan: 'East Coast',
+  Melaka: 'Southern Region',
+  'Negeri Sembilan': 'Central Region',
+  Pahang: 'East Coast',
+  Penang: 'Northern Region',
+  Perak: 'Northern Region',
+  Perlis: 'Northern Region',
+  Sabah: 'East Malaysia',
+  Sarawak: 'East Malaysia',
+  Selangor: 'Central Region',
+  Terengganu: 'East Coast',
+  'Kuala Lumpur': 'Federal Territory',
+  Putrajaya: 'Federal Territory',
+  Labuan: 'Federal Territory'
+};
+
+const makeZoneId = (state: string, town: string) =>
+  `${state}-${town}`
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-|-$/g, '');
+
+const getTownCoordinates = (state: string, townName: string, index: number): { lat: number; lng: number } => {
+  const stateTowns = SEEDED_TOWNS_BY_STATE[state] || [];
+  const exactTown = stateTowns.find((town) => town.name.toLowerCase() === townName.toLowerCase());
+  if (exactTown) {
+    return { lat: exactTown.lat, lng: exactTown.lng };
+  }
+
+  const fallbackTown = stateTowns[index % Math.max(1, stateTowns.length)] || stateTowns[0];
+  if (fallbackTown) {
+    return { lat: fallbackTown.lat, lng: fallbackTown.lng };
+  }
+
+  return { lat: 3.139, lng: 101.6869 };
+};
+
+export const seedTownZonesInRealtimeDb = async (): Promise<void> => {
+  try {
+    const liveZonesRef = ref(rtdb, 'liveZones');
+    const snapshot = await get(liveZonesRef);
+    const current = snapshot.exists() ? (snapshot.val() as Record<string, any>) : {};
+    const existing = Object.values(current) as any[];
+    const baselineKeys = new Set(
+      existing
+        .filter((zone) => String(zone?.source || '').toLowerCase().trim() === 'baseline')
+        .map((zone) => `${String(zone?.locationName || '').trim().toLowerCase()}|${String(zone?.state || '').trim().toLowerCase()}`)
+        .filter((key) => key !== '|')
+    );
+    const writes: Promise<void>[] = [];
+
+    Object.entries(MALAYSIA_TOWNS).forEach(([rawState, towns]) => {
+      const state = normalizeStateName(rawState);
+      const region = STATE_REGION_MAP[state] || 'Malaysia';
+      towns.forEach((townName, index) => {
+        const town = normalizeToTownState(`${townName}, ${state}`).split(',')[0]?.trim() || townName;
+        const locationName = `${town}, ${state}`;
+        const zoneId = makeZoneId(state, town);
+        const baselineKey = `${locationName.trim().toLowerCase()}|${state.trim().toLowerCase()}`;
+        if (current[zoneId]) return;
+        if (baselineKeys.has(baselineKey)) return;
+
+        const coordinates = getTownCoordinates(state, town, index);
+
+        const baseZone = createZone(
+          zoneId,
+          town,
+          locationName,
+          state,
+          region,
+          coordinates.lat,
+          coordinates.lng,
+          1,
+          'No active flood alerts. Monitoring conditions.',
+          0.03,
+          ['Weather Seed']
+        );
+
+        const seededZone = {
+          ...baseZone,
+          id: zoneId,
+          locationName,
+          severity: 1,
+          status: 'active',
+          isWeatherFallbackZone: true,
+          reportId: null,
+          timestamp: Date.now(),
+          lastUpdated: Date.now(),
+          aiAnalysisText: `No active flood alerts for ${town}.`,
+          estimatedStartTime: 'N/A',
+          estimatedEndTime: 'N/A',
+          eventType: 'Normal',
+          source: 'baseline'
+        } as any;
+
+        baselineKeys.add(baselineKey);
+        writes.push(set(ref(rtdb, `liveZones/${zoneId}`), seededZone));
+      });
+    });
+
+    if (writes.length > 0) {
+      await Promise.all(writes);
+    }
+  } catch (error) {
+    console.warn('[BILAHUJAN] seedTownZonesInRealtimeDb failed (non-fatal):', error);
+  }
+};
+
 export const getFloodZones = (): Record<string, FloodZone> => {
   if (!floodZonesCache) {
     // All zones start at severity 0 (CLEAR). Real severity is set only by live AI refresh.
@@ -488,6 +719,8 @@ export const useFloodZones = () => {
   const [zones, setZones] = useState<Record<string, FloodZone>>(getFloodZones());
 
   useEffect(() => {
+    void seedTownZonesInRealtimeDb();
+
     // Listen to local window events (for same-tab updates)
     const handleUpdate = () => {
       setZones({ ...getFloodZones() });

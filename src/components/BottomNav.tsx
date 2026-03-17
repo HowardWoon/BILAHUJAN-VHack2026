@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useLiveZones } from '../services/firebaseHooks';
 
 interface BottomNavProps {
@@ -8,6 +8,23 @@ interface BottomNavProps {
 
 export default function BottomNav({ activeTab, onTabChange }: BottomNavProps) {
   const liveZones = useLiveZones();
+  const [unviewedUploads, setUnviewedUploads] = useState(0);
+
+  useEffect(() => {
+    const syncUnreadUploads = () => {
+      try {
+        setUnviewedUploads(Number(window.localStorage.getItem('bilahujan_unviewed_uploads') || '0'));
+      } catch {
+        setUnviewedUploads(0);
+      }
+    };
+
+    syncUnreadUploads();
+    window.addEventListener('unviewedUploadsChanged', syncUnreadUploads);
+    return () => {
+      window.removeEventListener('unviewedUploadsChanged', syncUnreadUploads);
+    };
+  }, []);
 
   // Count distinct states with an active flood alert (severity >= 4)
   const activeAlertStateCount = useMemo(() => {
@@ -44,10 +61,10 @@ export default function BottomNav({ activeTab, onTabChange }: BottomNavProps) {
         >
           <span className="material-icons-round text-[26px]">notifications</span>
           <span className="text-[10px] font-bold uppercase tracking-tighter">Alert</span>
-          {activeAlertStateCount > 0 && activeTab !== 'alert' && (
+          {(activeAlertStateCount > 0 || unviewedUploads > 0) && activeTab !== 'alert' && (
             <div className="absolute -top-1 right-[18%] min-w-[17px] h-[17px] bg-red-500 rounded-full border-2 border-white flex items-center justify-center animate-pulse">
               <span className="text-[9px] font-black text-white leading-none">
-                {activeAlertStateCount > 9 ? '9+' : activeAlertStateCount}
+                {Math.min(99, Math.max(activeAlertStateCount, unviewedUploads)) > 9 ? '9+' : Math.max(activeAlertStateCount, unviewedUploads)}
               </span>
             </div>
           )}

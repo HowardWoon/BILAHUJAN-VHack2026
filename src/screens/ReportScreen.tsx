@@ -1,7 +1,10 @@
 import { useState, useEffect, useRef } from 'react';
 import { GoogleMap, useJsApiLoader, Marker } from '@react-google-maps/api';
+import { ref, set } from 'firebase/database';
 import BottomNav from '../components/BottomNav';
-import { FloodAnalysisResult } from '../services/gemini';
+import { analyzeFloodImage, FloodAnalysisResult } from '../services/gemini';
+import { rtdb } from '../firebase';
+import { normalizeStateName, normalizeToTownState } from '../utils/floodCalculations';
 
 import { isMalaysianLocation, getMalaysiaLocationWarning } from '../utils/locationValidator';
 import { officialLogos } from '../data/officialLogos';
@@ -17,18 +20,47 @@ interface ReportScreenProps {
   initialLocation?: { lat: number; lng: number; address: string } | null;
 }
 
+interface SelectedLocation {
+  lat: number;
+  lng: number;
+  locationName: string;
+  state: string;
+  address: string;
+  geocodeComponents: any[];
+  source: 'search' | 'gps' | 'map';
+}
+
 export default function ReportScreen({ onTabChange, onScanClick, imageUri, onClearImage, analysisResult, initialLocation }: ReportScreenProps) {
   const [details, setDetails] = useState('');
   const [selectedDepts, setSelectedDepts] = useState<string[]>([]);
   const [isSubmitted, setIsSubmitted] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState<string>('');
   const [localAnalysisResult, setLocalAnalysisResult] = useState<FloodAnalysisResult | null>(null);
-  const [matchedZoneId, setMatchedZoneId] = useState<string | null>(null);
+
+  const [selectedLocation, setSelectedLocation] = useState<SelectedLocation | null>(
+    initialLocation
+      ? {
+          lat: initialLocation.lat,
+          lng: initialLocation.lng,
+          locationName: normalizeToTownState(initialLocation.address || ''),
+          state: '',
+          address: initialLocation.address || '',
+          geocodeComponents: [],
+          source: 'map',
+        }
+      : null
+  );
+  const [isResolvingLocation, setIsResolvingLocation] = useState(false);
   
-  const [mapCenter, setMapCenter] = useState({ lat: 4.2105, lng: 101.9758 }); // Center of Malaysia
+  const [mapCenter, setMapCenter] = useState(
+    initialLocation
+      ? { lat: initialLocation.lat, lng: initialLocation.lng }
+      : { lat: 4.2105, lng: 101.9758 }
+  );
   const [markerPosition, setMarkerPosition] = useState<{ lat: number; lng: number } | null>(null);
-  const [mapZoom, setMapZoom] = useState(6);
+  const [mapZoom, setMapZoom] = useState(initialLocation ? 13 : 6);
   const [searchQuery, setSearchQuery] = useState('');
-  const [address, setAddress] = useState({ main: '', sub: '' });
   const [isEditingMap, setIsEditingMap] = useState(false);
   const mapRef = useRef<google.maps.Map | null>(null);
   const [locationWarning, setLocationWarning] = useState<string>('');
@@ -39,41 +71,45 @@ export default function ReportScreen({ onTabChange, onScanClick, imageUri, onCle
     libraries: GOOGLE_MAPS_LIBRARIES,
   });
 
-  const reverseGeocode = (lat: number, lng: number) => {
-    if (window.google && window.google.maps && window.google.maps.Geocoder) {
-      const geocoder = new window.google.maps.Geocoder();
-      geocoder.geocode({ location: { lat, lng } }, (results, status) => {
-        if (status === 'OK' && results && results[0]) {
-          const addressComponents = results[0].address_components;
-          let main = results[0].formatted_address.split(',')[0];
-          let sub = 'Malaysia';
-          
-          const route = addressComponents.find(c => c.types.includes('route'))?.long_name;
-          const locality = addressComponents.find(c => c.types.includes('locality'))?.long_name;
-          const state = addressComponents.find(c => c.types.includes('administrative_area_level_1'))?.long_name;
-          
-          if (route && locality) {
-            main = `${route}, ${locality}`;
-            sub = `${state || ''}, Malaysia`;
-          } else if (locality) {
-            main = locality;
-            sub = `${state || ''}, Malaysia`;
-          } else {
-             main = results[0].formatted_address.split(',')[0];
-             sub = results[0].formatted_address.split(',').slice(1).join(',').trim();
-          }
+  const reverseGeocodeToSelectedLocation = async (lat: number, lng: number, source: 'gps' | 'map' = 'map') => {
+    setIsResolvingLocation(true);
+    try {
+      const response = await fetch(
+        `https://maps.googleapis.com/maps/api/geocode/json`
+        + `?latlng=${lat},${lng}`
+        + `&region=MY`
+        + `&components=country:MY`
+        + `&key=${import.meta.env.VITE_GOOGLE_MAPS_API_KEY}`
+      ).then((result) => result.json());
 
-          setAddress({ main, sub });
-        }
+      const first = response.results?.[0];
+      if (!first) return;
+      const components = first.address_components ?? [];
+      const normalizedLocationName = normalizeToTownState(first.formatted_address || '', components);
+      const stateRaw = components.find((component: any) =>
+        Array.isArray(component?.types) && component.types.includes('administrative_area_level_1')
+      )?.long_name ?? '';
+      const normalizedState = normalizeStateName(stateRaw);
+
+      setSelectedLocation({
+        lat,
+        lng,
+        locationName: normalizedLocationName,
+        state: normalizedState,
+        address: first.formatted_address || '',
+        geocodeComponents: components,
+        source,
       });
+    } finally {
+      setIsResolvingLocation(false);
     }
   };
 
-  const handleSearch = () => {
-    if (!searchQuery.trim()) return;
+  const handleSearch = async (query: string) => {
+    if (!query.trim()) return;
     
     // Validate if location is Malaysian before searching
-    if (!isMalaysianLocation(searchQuery)) {
+    if (!isMalaysianLocation(query)) {
       // Don't search for non-Malaysian locations
       setLocationWarning(getMalaysiaLocationWarning());
       return;
@@ -82,39 +118,64 @@ export default function ReportScreen({ onTabChange, onScanClick, imageUri, onCle
     // Clear warning if location is valid
     setLocationWarning('');
     
-    if (window.google && window.google.maps && window.google.maps.Geocoder) {
-      const geocoder = new window.google.maps.Geocoder();
-      geocoder.geocode({ address: `${searchQuery}, Malaysia` }, (results, status) => {
-        if (status === 'OK' && results && results[0]) {
-          const location = results[0].geometry.location;
-          const newPos = { lat: location.lat(), lng: location.lng() };
-          setMapCenter(newPos);
-          setMarkerPosition(newPos);
-          setMapZoom(16);
-          if (mapRef.current) {
-            mapRef.current.panTo(newPos);
-            mapRef.current.setZoom(16);
-          }
-          reverseGeocode(newPos.lat, newPos.lng);
-        } else {
-          console.error("Geocoding failed: ", status);
-        }
+    setIsResolvingLocation(true);
+    try {
+      const response = await fetch(
+        `https://maps.googleapis.com/maps/api/geocode/json`
+        + `?address=${encodeURIComponent(query)}`
+        + `&region=MY`
+        + `&components=country:MY`
+        + `&key=${import.meta.env.VITE_GOOGLE_MAPS_API_KEY}`
+      ).then((result) => result.json());
+
+      const first = response.results?.[0];
+      if (!first?.geometry?.location) return;
+      const components = first.address_components ?? [];
+      const lat = Number(first.geometry.location.lat);
+      const lng = Number(first.geometry.location.lng);
+      const locationName = normalizeToTownState(first.formatted_address || '', components);
+      const state = normalizeStateName(
+        components.find((component: any) =>
+          Array.isArray(component?.types) && component.types.includes('administrative_area_level_1')
+        )?.long_name ?? ''
+      );
+
+      const nextCenter = { lat, lng };
+      setMapCenter(nextCenter);
+      setMapZoom(13);
+      setMarkerPosition(nextCenter);
+      setSelectedLocation({
+        lat,
+        lng,
+        locationName,
+        state,
+        address: first.formatted_address || '',
+        geocodeComponents: components,
+        source: 'search',
       });
+
+      if (mapRef.current) {
+        mapRef.current.panTo(nextCenter);
+        mapRef.current.setZoom(13);
+      }
+    } finally {
+      setIsResolvingLocation(false);
     }
   };
 
   useEffect(() => {
     if (isLoaded) {
-      if (navigator.geolocation) {
+      if (navigator.geolocation && !initialLocation) {
         navigator.geolocation.getCurrentPosition(
-          (position) => {
+          async (position) => {
             const pos = {
               lat: position.coords.latitude,
               lng: position.coords.longitude,
             };
             setMapCenter(pos);
             setMapZoom(14);
-            // Do not set markerPosition or reverseGeocode automatically to keep address empty initially
+            setMarkerPosition(pos);
+            await reverseGeocodeToSelectedLocation(pos.lat, pos.lng, 'gps');
           },
           () => {
             // Do nothing on error, leave address empty
@@ -124,15 +185,15 @@ export default function ReportScreen({ onTabChange, onScanClick, imageUri, onCle
         // Do nothing if no geolocation, leave address empty
       }
     }
-  }, [isLoaded]);
+  }, [isLoaded, initialLocation]);
 
   useEffect(() => {
     if (initialLocation) {
       setMapCenter({ lat: initialLocation.lat, lng: initialLocation.lng });
       setMarkerPosition({ lat: initialLocation.lat, lng: initialLocation.lng });
-      setMapZoom(16);
+      setMapZoom(13);
       setSearchQuery(initialLocation.address);
-      setAddress({ main: initialLocation.address, sub: 'Malaysia' });
+      void reverseGeocodeToSelectedLocation(initialLocation.lat, initialLocation.lng, 'map');
     }
   }, [initialLocation]);
 
@@ -144,7 +205,6 @@ export default function ReportScreen({ onTabChange, onScanClick, imageUri, onCle
 
     // Do not derive severity from static/live zones here.
     // Report screen must reflect Gemini image analysis only.
-    setMatchedZoneId(null);
     setLocalAnalysisResult(null);
   }, [analysisResult, imageUri]);
 
@@ -155,34 +215,117 @@ export default function ReportScreen({ onTabChange, onScanClick, imageUri, onCle
   };
 
   // All four conditions must be met before submitting
-  const hasLocation = !!address.main && !!markerPosition;
+  const hasLocation = !!selectedLocation?.locationName && !!markerPosition;
   const hasPhoto = !!imageUri;
-  const hasAnalysis = !!localAnalysisResult;
   const hasDept = selectedDepts.length > 0;
-  const canSubmit = hasLocation && hasPhoto && hasAnalysis && hasDept;
+  const canSubmit = hasLocation && hasPhoto && hasDept && !isSubmitting;
 
   const handleCancel = () => {
     setDetails('');
     setSelectedDepts([]);
     setSearchQuery('');
-    setAddress({ main: '', sub: '' });
+    setSelectedLocation(null);
     setMarkerPosition(null);
     setMapZoom(6);
     setMapCenter({ lat: 4.2105, lng: 101.9758 });
     setIsEditingMap(false);
     setLocalAnalysisResult(null);
-    setMatchedZoneId(null);
     setLocationWarning('');
+    setSubmitError('');
     onClearImage();
     setIsSubmitted(false);
   };
 
-  const handleSubmit = () => {
-    setIsSubmitted(true);
-    setTimeout(() => {
-      onTabChange('map');
-      handleCancel();
-    }, 3000);
+  const handleSubmit = async () => {
+    if (!imageUri) {
+      setSubmitError('Please upload a photo (mandatory).');
+      return;
+    }
+
+    if (!selectedLocation) {
+      setSubmitError('Please confirm a valid Malaysian location before submitting.');
+      return;
+    }
+
+    setSubmitError('');
+    setIsSubmitting(true);
+
+    try {
+      const imageMatch = imageUri.match(/^data:(.*?);base64,(.*)$/);
+      if (!imageMatch) {
+        throw new Error('Invalid image format. Please retake or re-upload the photo.');
+      }
+
+      const mimeType = imageMatch[1] || 'image/jpeg';
+      const base64Image = imageMatch[2] || '';
+      if (!base64Image) {
+        throw new Error('Image data is empty. Please re-upload the photo.');
+      }
+
+      const analyzed = await analyzeFloodImage(base64Image, mimeType);
+      setLocalAnalysisResult(analyzed);
+
+      const severity = Math.max(1, Math.min(10, Math.round(Number(analyzed.riskScore || 1))));
+      const zoneId = `user_reported_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+      const reportId = `report_${zoneId}_${Date.now()}`;
+
+      await set(ref(rtdb, `liveZones/${zoneId}`), {
+        id: zoneId,
+        name: selectedLocation.locationName,
+        specificLocation: selectedLocation.locationName,
+        locationName: normalizeToTownState(selectedLocation.address, selectedLocation.geocodeComponents),
+        state: selectedLocation.state,
+        lat: selectedLocation.lat,
+        lng: selectedLocation.lng,
+        center: { lat: selectedLocation.lat, lng: selectedLocation.lng },
+        severity,
+        source: 'user',
+        isWeatherFallbackZone: false,
+        reportId,
+        uploadedAt: Date.now(),
+        firstReportedAt: Date.now(),
+        startTime: new Date().toISOString(),
+        endTime: null,
+        description: analyzed.directive,
+        tips: analyzed.detectedHazards
+          ? analyzed.detectedHazards.split(/[,;]/).map((item) => item.trim()).filter(Boolean).slice(0, 5)
+          : [],
+        analysisData: {
+          waterDepth: analyzed.waterDepth,
+          confidence: analyzed.aiConfidence,
+          sceneContext: analyzed.infrastructureStatus,
+        },
+        aiConfidence: analyzed.aiConfidence,
+        aiAnalysisText: analyzed.directive,
+        eventType: analyzed.eventType,
+        estimatedStartTime: analyzed.estimatedStartTime,
+        estimatedEndTime: analyzed.estimatedEndTime,
+        status: severity >= 7 ? 'active' : severity >= 4 ? 'warning' : 'monitor',
+        timestamp: Date.now(),
+      });
+
+      await set(ref(rtdb, `liveReports/${reportId}`), {
+        id: reportId,
+        zoneId,
+        state: selectedLocation.state,
+        locationName: normalizeToTownState(selectedLocation.address, selectedLocation.geocodeComponents),
+        severity,
+        source: 'user',
+        timestamp: Date.now(),
+        description: details,
+      });
+
+      setIsSubmitted(true);
+      setTimeout(() => {
+        onTabChange('map');
+        handleCancel();
+      }, 3000);
+    } catch (error: any) {
+      console.error('Report submission error:', error);
+      setSubmitError(error?.message || 'Analysis failed. Please try again.');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   if (isSubmitted) {
@@ -245,11 +388,11 @@ export default function ReportScreen({ onTabChange, onScanClick, imageUri, onCle
                 }
               }}
               onKeyDown={(e) => {
-                if (e.key === 'Enter') handleSearch();
+                if (e.key === 'Enter') void handleSearch(searchQuery);
               }}
             />
             <button 
-              onClick={handleSearch}
+              onClick={() => void handleSearch(searchQuery)}
               className="bg-[#ec5b13] text-white px-4 py-3 text-sm font-bold hover:bg-[#d04e0f] transition-colors h-full"
             >
               Search
@@ -281,7 +424,8 @@ export default function ReportScreen({ onTabChange, onScanClick, imageUri, onCle
                     if (isEditingMap && e.latLng) {
                       const newPos = { lat: e.latLng.lat(), lng: e.latLng.lng() };
                       setMarkerPosition(newPos);
-                      reverseGeocode(newPos.lat, newPos.lng);
+                      setMapCenter(newPos);
+                      void reverseGeocodeToSelectedLocation(newPos.lat, newPos.lng, 'map');
                     }
                   }}
                 >
@@ -294,7 +438,7 @@ export default function ReportScreen({ onTabChange, onScanClick, imageUri, onCle
                         const newPos = { lat: e.latLng.lat(), lng: e.latLng.lng() };
                         setMarkerPosition(newPos);
                         setMapCenter(newPos);
-                        reverseGeocode(newPos.lat, newPos.lng);
+                        void reverseGeocodeToSelectedLocation(newPos.lat, newPos.lng, 'map');
                       }
                     }}
                   />
@@ -314,7 +458,7 @@ export default function ReportScreen({ onTabChange, onScanClick, imageUri, onCle
                 onClick={() => {
                   if (!isEditingMap && !markerPosition) {
                     setMarkerPosition(mapCenter);
-                    reverseGeocode(mapCenter.lat, mapCenter.lng);
+                    void reverseGeocodeToSelectedLocation(mapCenter.lat, mapCenter.lng, 'map');
                   }
                   setIsEditingMap(!isEditingMap);
                 }}
@@ -330,10 +474,15 @@ export default function ReportScreen({ onTabChange, onScanClick, imageUri, onCle
               <span className="material-icons-round text-[#ec5b13]">map</span>
             </div>
             <div className="flex-1 min-w-0">
-              {address.main ? (
+              {isResolvingLocation ? (
+                <div className="flex items-center gap-2 text-slate-500 text-sm">
+                  <div className="w-4 h-4 border-2 border-[#ec5b13]/30 border-t-[#ec5b13] rounded-full animate-spin" />
+                  <span>Detecting location...</span>
+                </div>
+              ) : selectedLocation?.locationName ? (
                 <>
-                  <p className="text-sm font-medium truncate">{address.main}</p>
-                  <p className="text-xs text-slate-500">{address.sub}</p>
+                  <p className="text-sm font-semibold text-gray-800 truncate">{selectedLocation.locationName}</p>
+                  <p className="text-xs text-gray-400">{selectedLocation.state || ''}</p>
                 </>
               ) : (
                 <p className="text-sm font-medium text-slate-500 italic">Please search or select a location on the map</p>
@@ -484,7 +633,6 @@ export default function ReportScreen({ onTabChange, onScanClick, imageUri, onCle
               {[
                 { done: hasLocation, label: 'Confirm a location on the map' },
                 { done: hasPhoto,    label: 'Upload a flood photo' },
-                { done: hasAnalysis, label: 'AI analysis completed on photo' },
                 { done: hasDept,    label: 'Select at least one authority to notify' },
               ].map(({ done, label }) => (
                 <div key={label} className="flex items-center gap-2">
@@ -494,6 +642,12 @@ export default function ReportScreen({ onTabChange, onScanClick, imageUri, onCle
                   <span className={`text-sm ${done ? 'text-green-700 line-through' : 'text-slate-600'}`}>{label}</span>
                 </div>
               ))}
+            </div>
+          )}
+
+          {submitError && (
+            <div className="bg-red-50 border border-red-200 rounded-xl p-3 text-sm text-red-700">
+              {submitError}
             </div>
           )}
 

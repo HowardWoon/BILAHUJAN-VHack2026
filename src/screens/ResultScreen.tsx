@@ -2,11 +2,25 @@ import { useState, useEffect } from 'react';
 import StatusBar from '../components/StatusBar';
 import BottomNav from '../components/BottomNav';
 import { FloodAnalysisResult } from '../services/gemini';
+import { fetchStateTownsWithWeather } from '../services/gemini';
 import { createZone } from '../data/floodZones';
 import type { FloodZone } from '../data/floodZones';
-import { ref, set } from 'firebase/database';
+import { get, ref, set } from 'firebase/database';
 import { collection, addDoc, serverTimestamp } from 'firebase/firestore';
 import { rtdb, db } from '../firebase';
+import {
+  calcHistoricalRiskScore,
+  deduplicateFTName,
+  severityToAssessment,
+  severityToHeroBg,
+  severityToRiskLabel,
+  severityToRainfall,
+  severityToBlockage,
+  extractStateFromGeocode,
+  normalizeStateName,
+  trimToCity,
+  normalizeToTownState
+} from '../utils/floodCalculations';
 
 // ── Metric helpers ──────────────────────────────────────────────
 const formatTime = (t: string): string => {
@@ -48,30 +62,6 @@ const parsePassability = (text: string) => [
 const parseHazards = (text: string): string[] =>
   text.split(/[,;]/).map(h => h.trim()).filter(Boolean);
 
-function normalizeMalaysianStateName(rawState: string): string {
-  const stateName = (rawState || '').trim();
-  if (!stateName) return 'Unknown';
-
-  if (stateName.includes('Kuala Lumpur')) return 'Kuala Lumpur';
-  if (stateName.includes('Labuan')) return 'Labuan';
-  if (stateName.includes('Putrajaya')) return 'Putrajaya';
-  if (stateName.includes('Penang') || stateName.includes('Pulau Pinang')) return 'Penang';
-  if (stateName.includes('Malacca') || stateName.includes('Melaka')) return 'Melaka';
-  if (stateName.includes('Johor')) return 'Johor';
-  if (stateName.includes('Kedah')) return 'Kedah';
-  if (stateName.includes('Kelantan')) return 'Kelantan';
-  if (stateName.includes('Negeri Sembilan')) return 'Negeri Sembilan';
-  if (stateName.includes('Pahang')) return 'Pahang';
-  if (stateName.includes('Perak')) return 'Perak';
-  if (stateName.includes('Perlis')) return 'Perlis';
-  if (stateName.includes('Sabah')) return 'Sabah';
-  if (stateName.includes('Sarawak')) return 'Sarawak';
-  if (stateName.includes('Selangor')) return 'Selangor';
-  if (stateName.includes('Terengganu')) return 'Terengganu';
-
-  return 'Unknown';
-}
-
 function extractStateFromAddress(address: string): string {
   const states = [
     'Johor', 'Kedah', 'Kelantan', 'Melaka', 'Negeri Sembilan',
@@ -83,7 +73,7 @@ function extractStateFromAddress(address: string): string {
   const lowered = (address || '').toLowerCase();
   for (const state of states) {
     if (lowered.includes(state.toLowerCase())) {
-      return state === 'Pulau Pinang' ? 'Penang' : state;
+      return normalizeStateName(state === 'Pulau Pinang' ? 'Penang' : state);
     }
   }
 
@@ -112,50 +102,69 @@ function extractRegionFromState(state: string): string {
   return regions[state] || 'Central Region';
 }
 
-function formatLocationLabel(locality: string, sublocality: string, state: string): string {
-  const normalize = (value: string) => (value || '').trim().toLowerCase();
-  const cleanLocality = (locality || '').trim();
-  const cleanSublocality = (sublocality || '').trim();
-  const cleanState = (state || '').trim();
+const estimateRainfallFromSeverity = (severity: number): number => severityToRainfall(severity);
 
-  let place = 'Reported Location';
-  if (cleanSublocality && cleanLocality) {
-    place = normalize(cleanSublocality) === normalize(cleanLocality)
-      ? cleanLocality
-      : `${cleanSublocality}, ${cleanLocality}`;
-  } else if (cleanLocality) {
-    place = cleanLocality;
-  } else if (cleanSublocality) {
-    place = cleanSublocality;
-  }
-
-  if (!cleanState || cleanState === 'Unknown' || cleanState === 'Unknown State') {
-    return place;
-  }
-
-  if (normalize(place).includes(normalize(cleanState))) {
-    return place;
-  }
-
-  return `${place}, ${cleanState}`;
-}
-
-function estimateRainfallFromSeverity(severity: number): number {
-  const map: Record<number, number> = {
-    1: 20, 2: 35, 3: 55, 4: 80, 5: 110,
-    6: 145, 7: 185, 8: 235, 9: 290, 10: 380
-  };
-  return map[severity] || 50;
-}
-
-function estimateDrainageFromSeverity(severity: number): number {
-  return Math.min(95, severity * 9 + Math.floor(Math.random() * 10));
-}
+const estimateDrainageFromSeverity = (severity: number): number => severityToBlockage(severity);
 
 function estimateAffectedResidents(severity: number): number {
   const base = Math.max(1, severity) * 800;
   return base + Math.floor(Math.random() * base * 0.3);
 }
+
+const getFullLocationLabel = (value?: string | null): string => {
+  const text = (value || '').trim();
+  return text || 'Unknown Location';
+};
+
+const applySeverityHardFloors = (severity: number, result: FloodAnalysisResult): number => {
+  const context = [
+    result.waterDepth,
+    result.estimatedDepth,
+    result.detectedHazards,
+    result.directive,
+    result.humanRisk
+  ]
+    .map((item) => (item || '').toLowerCase())
+    .join(' ');
+
+  let adjusted = severity;
+  if (/(car\s*bonnet|bonnet\s*level)/i.test(context)) adjusted = Math.max(adjusted, 7);
+  if (/(car\s*roof|roof\s*level)/i.test(context)) adjusted = Math.max(adjusted, 8);
+  if (/(rooftop\s*rescue|roof\s*rescue)/i.test(context)) adjusted = Math.max(adjusted, 9);
+  return Math.min(10, Math.max(1, Math.round(adjusted)));
+};
+
+const extractGeminiSeverity = (analysis: any): number | null => {
+  const candidates = [
+    analysis?.severity,
+    analysis?.score,
+    analysis?.floodLevel,
+    analysis?.level,
+    analysis?.severityScore,
+    analysis?.riskScore,
+  ];
+
+  for (const candidate of candidates) {
+    if (typeof candidate === 'number' && Number.isFinite(candidate)) {
+      return candidate;
+    }
+    if (typeof candidate === 'string') {
+      const asNumber = Number(candidate);
+      if (Number.isFinite(asNumber)) {
+        return asNumber;
+      }
+      const normalized = candidate.trim().toUpperCase();
+      if (normalized === 'CATASTROPHIC') return 10;
+      if (normalized === 'CRITICAL') return 9;
+      if (normalized === 'SEVERE') return 7;
+      if (normalized === 'MODERATE') return 5;
+      if (normalized === 'MINOR') return 3;
+      if (normalized === 'NORMAL') return 1;
+    }
+  }
+
+  return null;
+};
 
 interface ResultScreenProps {
   result: FloodAnalysisResult;
@@ -167,40 +176,46 @@ interface ResultScreenProps {
   onUploadAlert?: (zoneId: string, zone: import('../data/floodZones').FloodZone) => void;
 }
 
+interface UploadedZoneSummary {
+  zoneId: string;
+  state: string;
+  locationName: string;
+  severity: number;
+}
+
 export default function ResultScreen({ result, imageUri, location, onBack, onTabChange, zoneId, onUploadAlert }: ResultScreenProps) {
+  const geminiApiKey = import.meta.env.VITE_GEMINI_API_KEY as string;
   const [uploading, setUploading] = useState(false);
   const [uploadSuccess, setUploadSuccess] = useState(false);
+  const [showNavigationCard, setShowNavigationCard] = useState(false);
+  const [uploadedZoneSummary, setUploadedZoneSummary] = useState<UploadedZoneSummary | null>(null);
   const [uploadError, setUploadError] = useState<string | null>(null);
-  const [fullAddress, setFullAddress] = useState(location?.address || 'Unknown Location');
+  const [fullAddress, setFullAddress] = useState(getFullLocationLabel(location?.address));
   const [detectedState, setDetectedState] = useState('Unknown State');
+  const geminiSeverityRaw = extractGeminiSeverity(result as any);
+  const finalDisplaySeverity = Math.max(1, Math.min(10, Math.round(geminiSeverityRaw ?? 1)));
+
+  useEffect(() => {
+    if (!uploadSuccess) return;
+    const timer = window.setTimeout(() => {
+      setShowNavigationCard(true);
+    }, 2000);
+
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, [uploadSuccess]);
 
   useEffect(() => {
     if (location && window.google && window.google.maps && window.google.maps.Geocoder) {
       const geocoder = new window.google.maps.Geocoder();
       geocoder.geocode({ location: { lat: location.lat, lng: location.lng } }, (results, status) => {
         if (status === 'OK' && results && results[0]) {
-          setFullAddress(results[0].formatted_address);
+          setFullAddress(getFullLocationLabel(results[0].formatted_address));
           
           // Find state (administrative_area_level_1)
-          const addressComponents = results[0].address_components;
-          const stateComponent = addressComponents.find(c => c.types.includes('administrative_area_level_1'));
-          
-          const normalizedState = normalizeMalaysianStateName(stateComponent?.long_name || '');
-
-          // Find a good human readable name (locality, sublocality, or route)
-          const locality = addressComponents.find(c => c.types.includes('locality'))?.long_name;
-          const sublocality = addressComponents.find(c => c.types.includes('sublocality'))?.long_name;
-          const route = addressComponents.find(c => c.types.includes('route'))?.long_name;
-          
-          let readableName = formatLocationLabel(locality || route || '', sublocality || '', normalizedState);
-          if (!readableName || readableName === 'Reported Location') {
-            readableName = results[0].formatted_address.split(',')[0];
-          }
-          
-          // Store the readable name in fullAddress state for now, we'll use it in createZone
-          setFullAddress(readableName);
-
-          if (stateComponent) {
+          const normalizedState = extractStateFromGeocode(results[0]);
+          if (normalizedState !== 'Unknown') {
             setDetectedState(normalizedState);
           }
         }
@@ -208,11 +223,10 @@ export default function ResultScreen({ result, imageUri, location, onBack, onTab
     } else if (location?.address) {
        // Fallback to simple string matching if geocoding fails
        const states = ['Johor', 'Kedah', 'Kelantan', 'Melaka', 'Negeri Sembilan', 'Pahang', 'Perak', 'Perlis', 'Penang', 'Sabah', 'Sarawak', 'Selangor', 'Terengganu', 'Kuala Lumpur', 'Putrajaya', 'Labuan'];
+       setFullAddress(getFullLocationLabel(location.address));
        for (const state of states) {
          if (location.address.toLowerCase().includes(state.toLowerCase())) {
            setDetectedState(state);
-           const firstSegment = (location.address.split(',')[0] || '').trim();
-           setFullAddress(formatLocationLabel(firstSegment, '', state));
            break;
          }
        }
@@ -249,8 +263,7 @@ export default function ResultScreen({ result, imageUri, location, onBack, onTab
           const geocodeResult = await new Promise<string>((resolve) => {
             geocoder.geocode({ location: { lat: location.lat, lng: location.lng } }, (results, status) => {
               if (status === 'OK' && results && results[0]) {
-                const stateComponent = results[0].address_components.find(c => c.types.includes('administrative_area_level_1'));
-                resolve(normalizeMalaysianStateName(stateComponent?.long_name || ''));
+                resolve(extractStateFromGeocode(results[0]));
                 return;
               }
               resolve('Unknown');
@@ -267,26 +280,80 @@ export default function ResultScreen({ result, imageUri, location, onBack, onTab
       };
 
       const derivedState = await resolveUploadState();
-      if (derivedState === 'Unknown') {
+
+      let components: Array<{ types: string[]; long_name: string; short_name: string }> = [];
+      let formattedAddress = '';
+      try {
+        const geocodeResult = await fetch(
+          `https://maps.googleapis.com/maps/api/geocode/json`
+          + `?latlng=${location.lat},${location.lng}`
+          + `&key=${import.meta.env.VITE_GOOGLE_MAPS_API_KEY}`
+        ).then((response) => response.json());
+
+        components = geocodeResult.results?.[0]?.address_components ?? [];
+        formattedAddress = geocodeResult.results?.[0]?.formatted_address ?? '';
+      } catch {
+        components = [];
+        formattedAddress = '';
+      }
+
+      const resolvedLocationName = normalizeToTownState(
+        formattedAddress || getFullLocationLabel(fullAddress || location.address),
+        components
+      );
+      const stateRaw = components.find((c) => c.types.includes('administrative_area_level_1'))?.long_name ?? '';
+      const normalizedGeocodeState = normalizeStateName(stateRaw);
+      const finalState = normalizedGeocodeState || (derivedState !== 'Unknown' ? derivedState : '');
+      if (!finalState) {
         setUploadError('Unable to detect a specific state for this report. Please set a clearer location and try again.');
         return;
       }
+      if (geminiSeverityRaw == null) {
+        console.error('[ResultScreen] Invalid severity from Gemini result:', result);
+        setUploadError('Could not determine severity. Please retake photo.');
+        return;
+      }
+      const geminiScore = Math.max(1, Math.min(10, Math.round(geminiSeverityRaw)));
+      let rainfallMmHr = 0;
+      try {
+        if (geminiApiKey) {
+          const towns = await fetchStateTownsWithWeather(finalState);
+          const locationLower = resolvedLocationName.toLowerCase();
+          const matchingTown = towns.find((town) => locationLower.includes(town.town.toLowerCase()));
+          const inferredSeverity = Number(matchingTown?.severity ?? 0);
+          rainfallMmHr = inferredSeverity > 0 ? inferredSeverity * 6 : 0;
+        }
+      } catch {
+        rainfallMmHr = 0;
+      }
 
-      const normalizedSeverity = Math.max(1, Math.min(10, Math.round(Number(result.riskScore) || 1)));
-      const region = extractRegionFromState(derivedState);
+      const historicalRiskScore = calcHistoricalRiskScore(finalState, resolvedLocationName);
+      const reportId = `report_${generatedZoneId}_${timestamp}`;
+      const geminiDescription = result.directive || 'Citizen flood report submitted.';
+      const geminiTips = parseHazards(result.detectedHazards || '').slice(0, 5);
+
+      const normalizedSeverity = applySeverityHardFloors(geminiScore, result);
+      const region = extractRegionFromState(finalState);
 
       const zoneData = {
         id: generatedZoneId,
-        name: fullAddress || location.address || 'Reported Flood Zone',
-        specificLocation: fullAddress || location.address || 'Reported Flood Zone',
-        state: derivedState || 'Kuala Lumpur',
+        name: resolvedLocationName,
+        specificLocation: resolvedLocationName,
+        locationName: resolvedLocationName,
+        state: finalState || 'Kuala Lumpur',
         region,
         severity: normalizedSeverity,
         rainfall: estimateRainfallFromSeverity(normalizedSeverity),
         drainageBlockage: estimateDrainageFromSeverity(normalizedSeverity),
         center: { lat: location.lat, lng: location.lng },
+        lat: location?.lat ?? null,
+        lng: location?.lng ?? null,
         forecast: result.directive || 'Citizen flood report submitted.',
         timestamp,
+        uploadedAt: Date.now(),
+        firstReportedAt: Date.now(),
+        startTime: new Date().toISOString(),
+        endTime: null,
         lastUpdated: new Date().toISOString(),
         eventType: result.eventType || 'Flash Flood',
         waterDepth: result.waterDepth || 'Unknown',
@@ -297,7 +364,11 @@ export default function ResultScreen({ result, imageUri, location, onBack, onTab
         directive: result.directive || '',
         aiConfidence: result.aiConfidence || 0,
         isUserReport: true,
-        source: 'citizen_scan',
+        source: 'user',
+        reportId,
+        isWeatherFallbackZone: false,
+        description: geminiDescription,
+        tips: geminiTips,
         reportedAt: new Date().toISOString(),
         status: normalizedSeverity >= 7 ? 'active' : normalizedSeverity >= 4 ? 'warning' : 'monitor',
         affectedResidents: estimateAffectedResidents(normalizedSeverity),
@@ -311,7 +382,7 @@ export default function ResultScreen({ result, imageUri, location, onBack, onTab
         aiRecommendation: {
           impassableRoads: result.passability || 'Unknown',
           evacuationRoute: result.directive || 'Follow local authority advisories.',
-          evacuationCenter: `SMK ${derivedState}`
+          evacuationCenter: `SMK ${finalState}`
         },
         color: normalizedSeverity >= 8 ? 'red' : normalizedSeverity >= 4 ? 'orange' : 'yellow',
         paths: [{ lat: location.lat, lng: location.lng }],
@@ -323,21 +394,25 @@ export default function ResultScreen({ result, imageUri, location, onBack, onTab
       await set(ref(rtdb, `liveZones/${generatedZoneId}`), zoneData);
 
       const reportData = {
-        id: generatedZoneId,
+        id: reportId,
+        state: finalState,
+        locationName: resolvedLocationName,
         location: {
           lat: location.lat,
           lng: location.lng,
-          address: location.address || fullAddress || 'Unknown Location'
+          address: resolvedLocationName
         },
         analysisResult: result,
         timestamp,
         severity: normalizedSeverity,
+        source: 'user',
         status: 'completed',
         zoneId: generatedZoneId,
+        reportId,
         reportCount: 1
       };
 
-      await set(ref(rtdb, `liveReports/${generatedZoneId}`), reportData);
+      await set(ref(rtdb, `liveReports/${reportId}`), reportData);
 
       try {
         await addDoc(collection(db, 'reports'), {
@@ -373,17 +448,14 @@ export default function ResultScreen({ result, imageUri, location, onBack, onTab
       floodZone.estimatedStartTime = zoneData.estimatedStartTime;
       floodZone.estimatedEndTime = zoneData.estimatedEndTime;
       floodZone.eventType = zoneData.eventType;
+      (floodZone as any).locationName = zoneData.locationName;
 
-      if (onUploadAlert) {
-        onUploadAlert(generatedZoneId, floodZone);
-      } else {
-        window.dispatchEvent(new CustomEvent('floodAlert', {
-          detail: {
-            zoneId: generatedZoneId,
-            zone: floodZone,
-          }
-        }));
-      }
+      window.dispatchEvent(new CustomEvent('floodAlert', {
+        detail: {
+          zoneId: generatedZoneId,
+          zone: floodZone,
+        }
+      }));
 
       if (normalizedSeverity >= 7) {
         try {
@@ -396,6 +468,19 @@ export default function ResultScreen({ result, imageUri, location, onBack, onTab
       }
 
       setUploadSuccess(true);
+      setUploadedZoneSummary({
+        zoneId: generatedZoneId,
+        state: zoneData.state,
+        locationName: zoneData.locationName,
+        severity: zoneData.severity
+      });
+      try {
+        const currentUnread = Number(window.localStorage.getItem('bilahujan_unviewed_uploads') || '0');
+        window.localStorage.setItem('bilahujan_unviewed_uploads', `${Math.max(0, currentUnread) + 1}`);
+        window.dispatchEvent(new CustomEvent('unviewedUploadsChanged'));
+      } catch {
+        // non-fatal
+      }
       console.log('✅ Upload to Alert Zone successful:', generatedZoneId);
     } catch (error: any) {
       console.error('Upload to Alert Zone error:', error);
@@ -466,7 +551,7 @@ export default function ResultScreen({ result, imageUri, location, onBack, onTab
         <div className="px-6 mb-6">
           <div className="flex items-center gap-2 mb-4 text-slate-600 bg-white p-3 rounded-xl border border-slate-100 shadow-sm">
             <span className="material-icons-round text-[#E65100]">location_on</span>
-            <p className="text-sm font-medium truncate">{fullAddress}</p>
+            <p className="text-sm font-medium truncate">{deduplicateFTName(normalizeToTownState(fullAddress) || trimToCity(fullAddress))}</p>
           </div>
 
           <button
@@ -509,9 +594,55 @@ export default function ResultScreen({ result, imageUri, location, onBack, onTab
             <div className="flex items-center gap-2 p-3 bg-green-50 border border-green-100 rounded-xl mt-2">
               <span className="material-icons-round text-green-500 text-sm">check_circle</span>
               <p className="text-green-700 text-xs font-medium">
-                Report saved to Firebase. Alert zones and dashboard updated in real time.
-                {(Math.max(1, Math.min(10, Math.round(Number(result.riskScore) || 1))) >= 7) && ' 🚨 Authorities have been notified.'}
+                ✓ Alert Zone Updated! Report saved to Firebase.
+                {(finalDisplaySeverity >= 7) && ' 🚨 Authorities have been notified.'}
               </p>
+            </div>
+          )}
+
+          {showNavigationCard && uploadedZoneSummary && (
+            <div className="bg-indigo-950 border border-indigo-500 rounded-2xl p-4 mt-3">
+              <p className="text-gray-300 text-xs mb-1">📍 Your report has been added to:</p>
+              <p className="text-white font-bold text-lg">{uploadedZoneSummary.state}</p>
+              <p className="text-indigo-300 text-sm">
+                {deduplicateFTName(uploadedZoneSummary.locationName)} · Level {uploadedZoneSummary.severity}
+                {` · ${severityToRiskLabel(uploadedZoneSummary.severity)}`}
+              </p>
+              <button
+                onClick={() => {
+                  if (onUploadAlert && uploadedZoneSummary) {
+                    const navZone: FloodZone = {
+                      id: uploadedZoneSummary.zoneId,
+                      name: uploadedZoneSummary.locationName,
+                      specificLocation: uploadedZoneSummary.locationName,
+                      state: uploadedZoneSummary.state,
+                      region: extractRegionFromState(uploadedZoneSummary.state),
+                      center: { lat: location?.lat || 0, lng: location?.lng || 0 },
+                      severity: uploadedZoneSummary.severity,
+                      forecast: result.directive || 'Uploaded citizen report.',
+                      aiConfidence: result.aiConfidence || 0,
+                      timestamp: Date.now(),
+                      lastUpdated: new Date().toISOString(),
+                      color: uploadedZoneSummary.severity >= 8 ? 'red' : uploadedZoneSummary.severity >= 4 ? 'orange' : 'yellow',
+                      paths: [{ lat: location?.lat || 0, lng: location?.lng || 0 }],
+                      aiAnalysisText: result.directive || '',
+                      estimatedStartTime: result.estimatedStartTime || 'Unknown',
+                      estimatedEndTime: result.estimatedEndTime || 'Unknown',
+                      eventType: result.eventType || 'Flash Flood',
+                      drainageBlockage: estimateDrainageFromSeverity(uploadedZoneSummary.severity),
+                      rainfall: estimateRainfallFromSeverity(uploadedZoneSummary.severity),
+                      sources: ['Citizen Scan', 'Gemini AI']
+                    } as FloodZone;
+                    (navZone as any).locationName = uploadedZoneSummary.locationName;
+                    onUploadAlert(uploadedZoneSummary.zoneId, navZone);
+                  } else {
+                    onTabChange('alert');
+                  }
+                }}
+                className="mt-3 w-full bg-indigo-600 text-white py-2 rounded-xl font-semibold active:opacity-80"
+              >
+                View in Alert Menu →
+              </button>
             </div>
           )}
         </div>
@@ -519,16 +650,17 @@ export default function ResultScreen({ result, imageUri, location, onBack, onTab
         <div className="px-6 mb-6">
           {/* Severity Banner */}
           {(() => {
-            const numericScore = Math.max(0, Math.min(10, Math.round(Number(result.riskScore) || 0)));
+            const numericScore = finalDisplaySeverity;
             const score = result.isRelevant ? Math.max(1, numericScore) : numericScore;
             let bgGradient = 'from-green-500 to-emerald-600';
-            let textLabel = 'NORMAL';
+            let textLabel = severityToRiskLabel(score);
             let icon = 'check_circle';
-            let description = 'No significant flood risk detected. Conditions are safe.';
-            if (score >= 9) { bgGradient = 'from-red-700 to-red-900'; textLabel = 'CRITICAL'; icon = 'crisis_alert'; description = 'Catastrophic flooding. Immediate evacuation is imperative. Life is at risk.'; }
-            else if (score >= 7) { bgGradient = 'from-red-500 to-red-700'; textLabel = 'SEVERE'; icon = 'warning'; description = 'Severe flooding. Vehicles and pedestrians cannot pass safely. Evacuate now.'; }
-            else if (score >= 5) { bgGradient = 'from-orange-400 to-orange-600'; textLabel = 'MODERATE'; icon = 'report_problem'; description = 'Moderate flooding. Cars at risk of stalling. Avoid the area if possible.'; }
-            else if (score >= 3) { bgGradient = 'from-yellow-400 to-amber-500'; textLabel = 'MINOR'; icon = 'info'; description = 'Minor pooling. Motorcycles and pedestrians should proceed with caution.'; }
+            let description = severityToAssessment(score);
+            bgGradient = severityToHeroBg(score);
+            if (score >= 9) icon = 'crisis_alert';
+            else if (score >= 7) icon = 'warning';
+            else if (score >= 5) icon = 'report_problem';
+            else if (score >= 3) icon = 'info';
             return (
               <div className={`bg-gradient-to-br ${bgGradient} rounded-2xl p-5 mb-4 text-white shadow-lg`}>
                 <div className="flex items-center gap-3 mb-2">

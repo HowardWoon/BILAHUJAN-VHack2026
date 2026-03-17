@@ -1,372 +1,383 @@
-import { useMemo, useState, useEffect } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { ref, onValue, get } from 'firebase/database';
 import StatusBar from '../components/StatusBar';
 import BottomNav from '../components/BottomNav';
-import { getFloodZones } from '../data/floodZones';
+import { rtdb } from '../firebase';
+import type { FloodZone } from '../data/floodZones';
+import { deduplicateFTName, isRealZone, severityToBadge, severityToBorderColor, trimToCity } from '../utils/floodCalculations';
 
-interface EvacCenter {
-  name: string;
-  address: string;
-  lat: number;
-  lng: number;
-  distanceKm: number;
-  placeId: string;
+interface ZoneListItem extends FloodZone {
+  uploaded: boolean;
 }
-
-const haversineKm = (lat1: number, lng1: number, lat2: number, lng2: number) => {
-  const R = 6371;
-  const dLat = ((lat2 - lat1) * Math.PI) / 180;
-  const dLng = ((lng2 - lng1) * Math.PI) / 180;
-  const a =
-    Math.sin(dLat / 2) ** 2 +
-    Math.cos((lat1 * Math.PI) / 180) * Math.cos((lat2 * Math.PI) / 180) * Math.sin(dLng / 2) ** 2;
-  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-};
-
-const getDisplayLocationName = (name: string, state?: string) => {
-  const raw = (name || '')
-    .replace(/\s*\(.*?\)\s*/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-
-  const normalizedState = (state || '').replace(/\s+/g, ' ').trim();
-  const escapedState = normalizedState.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const withoutState = normalizedState
-    ? raw.replace(new RegExp(`(?:,\s*)?${escapedState}\b`, 'ig'), '').replace(/\s+/g, ' ').replace(/^,\s*|,\s*$/g, '').trim()
-    : raw;
-
-  const parts = withoutState
-    .split(',')
-    .map((part) => part.trim())
-    .filter(Boolean)
-    .filter((part, index, all) => all.findIndex((candidate) => candidate.toLowerCase() === part.toLowerCase()) === index);
-
-  return parts.join(', ') || withoutState || raw || 'Unknown Location';
-};
 
 interface AlertDetailScreenProps {
   zoneId: string | null;
+  stateName?: string | null;
   onBack: () => void;
   onScanClick: () => void;
+  onViewMore: (zone: FloodZone) => void;
   onTabChange: (tab: 'map' | 'report' | 'alert' | 'dashboard') => void;
 }
 
-export default function AlertDetailScreen({ zoneId, onBack, onScanClick, onTabChange }: AlertDetailScreenProps) {
-  const zones = useMemo(() => getFloodZones(), []);
-  const zone = zoneId ? zones[zoneId] : null;
+const formatDateTime = (value: unknown, fallback = 'Unknown'): string => {
+  if (!value) return fallback;
 
-  const [evacCenters, setEvacCenters] = useState<EvacCenter[]>([]);
-  const [evacLoading, setEvacLoading] = useState(true);
-  const [selectedCenter, setSelectedCenter] = useState<EvacCenter | null>(null);
-
-  useEffect(() => {
-    if (!zone) return;
-    if (!(window as any).google?.maps?.places) { setEvacLoading(false); return; }
-
-    const service = new (window as any).google.maps.places.PlacesService(
-      document.createElement('div')
-    );
-    const centerLatLng = new (window as any).google.maps.LatLng(zone.center.lat, zone.center.lng);
-
-    // Search for evacuation-suitable public places nearby: schools, community halls, stadiums
-    const keywords = ['pusat pemindahan', 'dewan orang ramai', 'balai raya', 'sekolah', 'stadium', 'mosque'];
-    const allResults: EvacCenter[] = [];
-    let done = 0;
-
-    keywords.slice(0, 3).forEach(keyword => {
-      service.nearbySearch(
-        { location: centerLatLng, radius: 10000, keyword },
-        (results: any[], status: string) => {
-          done++;
-          if (status === 'OK' && results) {
-            results.slice(0, 3).forEach((place: any) => {
-              const lat = place.geometry.location.lat();
-              const lng = place.geometry.location.lng();
-              if (!allResults.find(r => r.placeId === place.place_id)) {
-                allResults.push({
-                  name: place.name,
-                  address: place.vicinity || '',
-                  lat,
-                  lng,
-                  distanceKm: haversineKm(zone.center.lat, zone.center.lng, lat, lng),
-                  placeId: place.place_id,
-                });
-              }
-            });
-          }
-          if (done === 3) {
-            // Sort by distance, keep closest 4
-            const sorted = allResults.sort((a, b) => a.distanceKm - b.distanceKm).slice(0, 4);
-            setEvacCenters(sorted);
-            if (sorted.length > 0) setSelectedCenter(sorted[0]);
-            setEvacLoading(false);
-          }
-        }
-      );
-    });
-
-    // Fallback if Places never calls back
-    const timer = setTimeout(() => setEvacLoading(false), 8000);
-    return () => clearTimeout(timer);
-  }, [zone]);
-
-  const handleNavigation = () => {
-    const dest = selectedCenter
-      ? `${selectedCenter.lat},${selectedCenter.lng}`
-      : zone ? `${zone.center.lat},${zone.center.lng}` : '';
-    window.open(`https://www.google.com/maps/dir/?api=1&destination=${dest}`, '_blank');
-  };
-
-  if (!zone) {
-    return (
-      <div className="relative h-full w-full flex flex-col bg-[#F8F9FA] items-center justify-center">
-        <p>Alert not found.</p>
-        <button onClick={onBack} className="mt-4 text-[#6366F1] font-bold">Go Back</button>
-      </div>
-    );
+  let date: Date | null = null;
+  if (typeof value === 'number') {
+    date = new Date(value > 1_000_000_000_000 ? value : value * 1000);
+  } else if (typeof value === 'string') {
+    const raw = value.trim();
+    if (!raw) return fallback;
+    if (/^\d+$/.test(raw)) {
+      const numeric = Number(raw);
+      date = new Date(numeric > 1_000_000_000_000 ? numeric : numeric * 1000);
+    } else {
+      const parsed = new Date(raw);
+      date = Number.isNaN(parsed.getTime()) ? null : parsed;
+    }
+  } else if (typeof value === 'object' && value && 'seconds' in (value as any)) {
+    date = new Date(Number((value as any).seconds) * 1000);
   }
 
-  const isHighRisk = zone.severity >= 8;
-  const isMediumRisk = zone.severity >= 4 && zone.severity < 8;
-  const riskLabel = isHighRisk ? 'HIGH RISK' : isMediumRisk ? 'MODERATE RISK' : 'LOW RISK';
-  const riskColor = isHighRisk ? 'red' : isMediumRisk ? 'orange' : 'green';
-  const riskText = isHighRisk ? 'AI predicts flood peak in 1.5 hours' : isMediumRisk ? 'AI predicts possible flooding during heavy rain' : 'AI predicts no immediate flood risk';
-  const displayLocationName = getDisplayLocationName(zone.specificLocation || zone.name || '', zone.state);
+  if (!date || Number.isNaN(date.getTime())) return fallback;
 
-  // Generate a static map image URL based on the zone's center coordinates
-  const mapImageUrl = `https://maps.googleapis.com/maps/api/staticmap?center=${zone.center.lat},${zone.center.lng}&zoom=14&size=600x300&maptype=roadmap&markers=color:${riskColor}%7Clabel:!%7C${zone.center.lat},${zone.center.lng}&key=${import.meta.env.VITE_GOOGLE_MAPS_API_KEY || ''}`;
-  return (
-    <div className="relative h-full w-full flex flex-col bg-[#F8F9FA]">
-      <StatusBar theme="light" />
-      
-      <header className="px-6 py-4 flex items-center justify-between">
-        <button 
-          onClick={onBack}
-          className="w-10 h-10 flex items-center justify-center bg-slate-100 rounded-full hover:bg-slate-200 transition-colors"
-        >
-          <span className="material-symbols-outlined">arrow_back</span>
+  const day = `${date.getDate()}`.padStart(2, '0');
+  const month = `${date.getMonth() + 1}`.padStart(2, '0');
+  const year = date.getFullYear();
+  const hour12 = date.toLocaleString('en-MY', { hour: 'numeric', hour12: true });
+  const minute = `${date.getMinutes()}`.padStart(2, '0');
+  const second = `${date.getSeconds()}`.padStart(2, '0');
+  const hour = hour12.replace(/\s?(am|pm)$/i, '').trim();
+  const suffix = hour12.toLowerCase().includes('pm') ? 'pm' : 'am';
+
+  return `${day}/${month}/${year} ${hour}:${minute}:${second} ${suffix}`;
+};
+
+const getZoneName = (zone: FloodZone) => deduplicateFTName(trimToCity(zone.locationName || zone.specificLocation || zone.name || zone.state || 'Unknown'));
+
+const isBaselineZone = (zone: FloodZone) =>
+  !isRealZone(zone);
+
+const isMonitoringBaselineZone = (zone: FloodZone) =>
+  Number(zone.severity || 1) <= 1 ||
+  (zone as any).isWeatherFallbackZone === true ||
+  (zone as any).source === 'baseline' ||
+  (zone as any).source === 'seed';
+
+const formatStartTime = (zone: FloodZone): string => {
+  if (isMonitoringBaselineZone(zone)) {
+    return 'N/A';
+  }
+
+  const startTime = (zone as any).startTime ?? zone.estimatedStartTime;
+  if (!startTime || `${startTime}`.trim().toLowerCase() === 'n/a') {
+    return 'Already in progress';
+  }
+
+  return formatDateTime(startTime, 'Already in progress');
+};
+
+const formatEndTime = (zone: FloodZone): string => {
+  if (isMonitoringBaselineZone(zone)) {
+    return 'N/A';
+  }
+
+  const endTime = (zone as any).endTime ?? zone.estimatedEndTime;
+  if (!endTime || `${endTime}`.trim().toLowerCase() === 'n/a') {
+    return 'Ongoing';
+  }
+
+  return formatDateTime(endTime, 'Ongoing');
+};
+
+const deriveTips = (zone: FloodZone): string[] => {
+  const fromTips = (zone as any).tips;
+  if (Array.isArray(fromTips) && fromTips.length > 0) {
+    return fromTips.slice(0, 3).map((tip) => `${tip}`.trim()).filter(Boolean);
+  }
+
+  const severity = Math.max(1, Math.min(10, Number(zone.severity || 1)));
+  if (severity >= 8) {
+    return [
+      'Evacuate now and avoid all flooded routes.',
+      'Keep emergency contacts and supplies ready.',
+      'Follow authority alerts and shelter instructions.'
+    ];
+  }
+  if (severity >= 4) {
+    return [
+      'Avoid low-lying roads and underpasses.',
+      'Prepare emergency kit and backup power.',
+      'Monitor rainfall and local authority updates.'
+    ];
+  }
+  if (severity >= 2) {
+    return [
+      'Watch water rise in nearby drains and roads.',
+      'Move valuables above floor level.',
+      'Be ready for quick evacuation if needed.'
+    ];
+  }
+
+  return [
+    'No active flood signal in this location.',
+    'Keep monitoring during heavy rain periods.',
+    'Report changes quickly for faster response.'
+  ];
+};
+
+const zoneFromState = (raw: Record<string, FloodZone>, zoneId: string | null) => {
+  if (zoneId && raw[zoneId]?.state) return raw[zoneId].state;
+
+  if (zoneId && zoneId.startsWith('live_')) {
+    const decoded = zoneId
+      .replace(/^live_/, '')
+      .split('_')
+      .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+      .join(' ')
+      .trim();
+    if (decoded) return decoded;
+  }
+
+  return '';
+};
+
+export default function AlertDetailScreen({ zoneId, stateName, onBack, onScanClick, onViewMore, onTabChange }: AlertDetailScreenProps) {
+  const [selectedState, setSelectedState] = useState('');
+  const [zonesById, setZonesById] = useState<Record<string, FloodZone>>({});
+  const [uploadedZoneIds, setUploadedZoneIds] = useState<Set<string>>(new Set());
+  const [refreshing, setRefreshing] = useState(false);
+  const [refreshKey, setRefreshKey] = useState(0);
+  const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+
+  useEffect(() => {
+    const unsubZones = onValue(ref(rtdb, 'liveZones'), (snapshot) => {
+      const raw = snapshot.exists() ? (snapshot.val() as Record<string, FloodZone>) : {};
+      setZonesById(raw);
+      const state = zoneFromState(raw, zoneId) || stateName || '';
+      setSelectedState(state);
+      setLastUpdated(new Date());
+      setRefreshing(false);
+    });
+
+    const unsubReports = onValue(ref(rtdb, 'liveReports'), (snapshot) => {
+      const raw = snapshot.exists() ? (snapshot.val() as Record<string, any>) : {};
+      const ids = new Set<string>();
+      Object.values(raw).forEach((report: any) => {
+        if (report?.zoneId) ids.add(String(report.zoneId));
+      });
+      setUploadedZoneIds(ids);
+    });
+
+    return () => {
+      unsubZones();
+      unsubReports();
+    };
+  }, [zoneId, stateName, refreshKey]);
+
+  const handleRefresh = () => {
+    if (refreshing) return;
+    setRefreshing(true);
+    setRefreshKey((previous) => previous + 1);
+  };
+
+  const grouped = useMemo(() => {
+    const stateZonesRaw = (Object.values(zonesById) as FloodZone[])
+      .filter((zone) => (zone.state || '').toLowerCase() === selectedState.toLowerCase())
+      .filter((zone) => zone.status !== 'resolved' && !(zone as any).isHistorical)
+      .filter((zone) => {
+        const id = zone.id || '';
+        return !(id.startsWith('live_') && !id.startsWith('live_town_'));
+      })
+      .map((zone) => ({
+        ...zone,
+        uploaded: (zone as any).source === 'user' || (zone as any).source === 'citizen_scan' || uploadedZoneIds.has(zone.id)
+      }))
+      .sort((a, b) => Number(b.severity || 1) - Number(a.severity || 1));
+
+    const seenZoneKeys = new Set<string>();
+    const stateZones = stateZonesRaw.filter((zone) => {
+      const key = `${String(zone.locationName || zone.specificLocation || zone.name || '').trim().toLowerCase()}|${String(zone.state || '').trim().toLowerCase()}`;
+      if (seenZoneKeys.has(key)) return false;
+      seenZoneKeys.add(key);
+      return true;
+    });
+
+    const realZones = stateZones.filter(isRealZone);
+    const highRisk = realZones.filter((zone) => Number(zone.severity || 1) >= 4);
+    const normal = realZones.filter((zone) => Number(zone.severity || 1) <= 3);
+    const baseline = stateZones.filter(isBaselineZone);
+
+    return { highRisk, normal, baseline, allCount: stateZones.length };
+  }, [zonesById, selectedState, uploadedZoneIds]);
+
+  const renderZoneCard = (zone: ZoneListItem, muted = false) => {
+    const severity = muted ? 1 : Math.max(1, Math.min(10, Number(zone.severity || 1)));
+      const badge = severityToBadge(severity);
+    const zoneTips = deriveTips(zone);
+    const startTime = formatStartTime(zone);
+    const endTime = formatEndTime(zone);
+    const isBaselineCard = isMonitoringBaselineZone(zone);
+    const hasUploadedSource = zone.source === 'user' || zone.reportId != null;
+
+    return (
+      <div key={zone.id} className={`rounded-2xl bg-slate-900 border border-slate-700 border-l-4 ${severityToBorderColor(severity)} p-4`}>
+        <div className="flex flex-col gap-1 mb-3">
+          <div className="flex items-center justify-between gap-2">
+            {severity >= 4 ? (
+              <span className="bg-orange-500 text-white text-xs font-bold px-2 py-1 rounded-md uppercase tracking-wide">
+                Flood Risk Nearby
+              </span>
+            ) : (
+              <span className="bg-green-600 text-white text-xs font-bold px-2 py-1 rounded-md uppercase tracking-wide">
+                Live Update — Normal
+              </span>
+            )}
+
+            <span className={`text-xs font-bold px-3 py-1 rounded-full ${badge.className}`}>
+              Level {severity}
+            </span>
+          </div>
+
+          {hasUploadedSource && (
+            <div className="flex">
+              <span className="bg-indigo-600 text-white text-xs font-semibold px-2 py-1 rounded-md uppercase tracking-wide">
+                Uploaded Analysis
+              </span>
+            </div>
+          )}
+        </div>
+
+        <h3 className="text-white font-bold text-lg mb-2 leading-snug line-clamp-2">
+          {deduplicateFTName(zone.locationName || getZoneName(zone))}
+        </h3>
+
+        <ul className="mt-3 space-y-1.5">
+          {zoneTips.map((tip) => (
+            <li key={`${zone.id}-${tip}`} className="text-slate-300 text-sm flex items-start gap-2">
+              <span className="material-icons-round text-indigo-300 text-sm mt-0.5">check_circle</span>
+              <span>{tip}</span>
+            </li>
+          ))}
+        </ul>
+
+        {!isBaselineCard ? (
+          <div className="mt-3 grid grid-cols-2 gap-2 bg-slate-950 border border-slate-700 rounded-xl p-2.5">
+            <div>
+              <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wide">Start</p>
+              <p className="text-xs text-slate-200 font-semibold mt-0.5">{startTime}</p>
+            </div>
+            <div>
+              <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wide">End</p>
+              <p className="text-xs text-slate-200 font-semibold mt-0.5">{endTime}</p>
+            </div>
+          </div>
+        ) : (
+          <p className="mt-3 text-xs text-gray-400 font-medium">Monitoring active. No flood event recorded.</p>
+        )}
+
+        <button onClick={() => onViewMore(zone)} className="mt-3 flex items-center text-indigo-300 font-semibold text-sm hover:text-indigo-200">
+          View More
+          <span className="material-icons-round text-sm ml-1">arrow_forward</span>
         </button>
-        <h1 className="text-lg font-bold tracking-tight">Alert Details</h1>
-        <div className="w-10 h-10"></div> {/* Placeholder for balance */}
+
+        {muted && (
+          <div className="mt-2 inline-flex items-center px-2 py-1 rounded-full bg-slate-700 text-slate-200 text-[10px] font-black tracking-wide">
+            BASELINE DATA
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  return (
+    <div className="relative h-full w-full flex flex-col bg-white">
+      <StatusBar theme="light" />
+
+      <header className="px-6 py-4 flex items-center justify-between">
+        <button onClick={onBack} className="w-10 h-10 rounded-full bg-gray-100 text-gray-700 flex items-center justify-center border border-gray-200">
+          <span className="material-icons-round">arrow_back</span>
+        </button>
+        <div className="text-center">
+          <h1 className="text-gray-900 font-black text-lg leading-tight">{selectedState || 'Selected State'} Locations</h1>
+          <p className="text-gray-500 text-xs">Select a location to view detailed analysis.</p>
+          <p className="text-gray-500 text-xs mt-1">
+            Last updated: {lastUpdated
+              ? lastUpdated.toLocaleTimeString('en-MY', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+              : 'Loading...'}
+          </p>
+        </div>
+        <button
+          onClick={handleRefresh}
+          disabled={refreshing}
+          aria-label="Refresh zones"
+          className={`w-10 h-10 rounded-full flex items-center justify-center transition-transform active:scale-95 ${refreshing ? 'bg-gray-200 text-gray-400' : 'bg-[#6B59D3] text-white hover:bg-[#5a48c2]'}`}
+        >
+          <span className={`material-icons-round ${refreshing ? 'animate-spin' : ''}`}>sync</span>
+        </button>
       </header>
 
-      <main className="flex-1 overflow-y-auto px-6 pb-24 space-y-4">
-        {/* Header Card */}
-        <div className={`bg-[#E53935] text-white p-6 rounded-3xl shadow-lg`}>
-          <div className="flex items-center gap-2 mb-2">
-            <span className="material-symbols-outlined text-white/90 text-sm">warning</span>
-            <span className="inline-block px-2 py-0.5 bg-white/20 text-white text-[10px] font-bold uppercase tracking-widest rounded-full">
-              {riskLabel}
-            </span>
+      <main className="flex-1 overflow-y-auto px-6 pb-28">
+        {grouped.allCount === 0 ? (
+          <div className="rounded-2xl bg-gray-50 border border-gray-200 p-6 text-center">
+            <span className="material-icons-round text-green-500 text-3xl">check_circle</span>
+            <h3 className="text-gray-900 text-lg font-bold mt-2">All Clear</h3>
+            <p className="text-gray-500 text-sm mt-1">No active flood alerts for {selectedState || 'this state'}.</p>
           </div>
-          <h2 className="text-4xl font-extrabold mb-2 tracking-tight">{displayLocationName}</h2>
-          <div className="flex items-center gap-2 text-white/90 text-sm font-medium">
-            <span className="material-symbols-outlined text-sm">smart_toy</span>
-            <p>{riskText}</p>
-          </div>
-        </div>
-
-        {/* Stats Grid */}
-        <div className="grid grid-cols-3 gap-3">
-          {(zone.estimatedStartTime || zone.estimatedEndTime) && (
-            <div className="col-span-3 bg-slate-100 p-4 rounded-2xl flex justify-between items-center border border-slate-200">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 bg-white rounded-full flex items-center justify-center shadow-sm text-slate-600">
-                  <span className="material-symbols-outlined">schedule</span>
+        ) : (
+          <div className="space-y-5">
+            {grouped.highRisk.length > 0 && (
+              <section>
+                <h2 className="text-gray-800 text-sm font-black tracking-wider mb-2">ACTIVE FLOOD ZONES</h2>
+                <div className="space-y-3">
+                  {grouped.highRisk.map((zone) => renderZoneCard(zone))}
                 </div>
-                <div>
-                  <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-0.5">Start ({zone.eventType || 'Event'})</p>
-                  <p className="text-sm font-bold text-slate-800">{zone.estimatedStartTime || 'Unknown'}</p>
+              </section>
+            )}
+
+            {grouped.normal.length > 0 && (
+              <section>
+                <h2 className="text-gray-600 text-sm font-black tracking-wider mb-2">NORMAL / WATCH ZONES</h2>
+                <div className="space-y-3">
+                  {grouped.normal.map((zone) => renderZoneCard(zone))}
                 </div>
-              </div>
-              <div className="text-right">
-                <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-0.5">End ({zone.eventType || 'Event'})</p>
-                <p className="text-sm font-bold text-slate-800">{zone.estimatedEndTime || 'Unknown'}</p>
-              </div>
-            </div>
-          )}
+              </section>
+            )}
 
-          <div className="bg-[#1E293B] text-white p-4 rounded-2xl flex flex-col justify-between">
-            <p className="text-[10px] font-medium text-slate-400 uppercase tracking-wider mb-2">Drainage</p>
-            <div>
-              <div className="text-2xl font-bold mb-1">{zone.drainageBlockage}%</div>
-              <p className={`text-xs font-medium ${zone.drainageBlockage > 70 ? 'text-[#E53935]' : zone.drainageBlockage > 40 ? 'text-orange-400' : 'text-green-400'}`}>
-                {zone.drainageBlockage > 70 ? 'Blocked' : zone.drainageBlockage > 40 ? 'Partial' : 'Clear'}
-              </p>
-            </div>
-            <div className="w-full h-1 bg-slate-700 rounded-full mt-3 overflow-hidden">
-              <div className={`h-full ${zone.drainageBlockage > 70 ? 'bg-[#E53935]' : zone.drainageBlockage > 40 ? 'bg-orange-400' : 'bg-green-400'}`} style={{ width: `${zone.drainageBlockage}%` }}></div>
-            </div>
-          </div>
-
-          <div className="bg-[#1E293B] text-white p-4 rounded-2xl flex flex-col justify-between relative overflow-hidden">
-            <p className="text-[10px] font-medium text-slate-400 uppercase tracking-wider mb-2">Rainfall</p>
-            <div>
-              <div className="text-2xl font-bold mb-1">{zone.rainfall}<span className="text-xs text-slate-400 font-normal">mm/hr</span></div>
-            </div>
-            <span className="material-symbols-outlined absolute right-2 bottom-2 text-3xl text-white/10">cloudy_snowing</span>
-          </div>
-
-          <div className="bg-[#2A244D] text-white p-4 rounded-2xl flex flex-col justify-between">
-            <div className="flex items-center gap-1 mb-2">
-              <p className="text-[10px] font-medium text-slate-400 uppercase tracking-wider">AI Conf</p>
-              <span className="material-symbols-outlined text-[10px] text-[#A78BFA]">auto_awesome</span>
-            </div>
-            <div>
-              <div className="text-2xl font-bold text-[#A78BFA] mb-1">{zone.aiConfidence}%</div>
-              <p className="text-[10px] font-medium text-slate-300">High Accuracy</p>
-            </div>
-          </div>
-        </div>
-
-        {/* Gemini AI Analysis */}
-        <div className="bg-white border border-[#A78BFA]/30 p-5 rounded-3xl shadow-sm relative overflow-hidden">
-          <div className="flex items-center gap-2 mb-4">
-            <div className="w-6 h-6 rounded-full bg-[#8B5CF6] flex items-center justify-center">
-              <span className="material-symbols-outlined text-white text-[14px]">smart_toy</span>
-            </div>
-            <h3 className="font-bold text-sm tracking-wide">GEMINI AI ANALYSIS</h3>
-          </div>
-          
-          <div className="flex gap-4">
-            <div className="w-24 h-24 rounded-xl overflow-hidden relative flex-shrink-0 border border-slate-200">
-              <img 
-                src={mapImageUrl} 
-                alt="Map" 
-                className="w-full h-full object-cover"
-                onError={(e) => {
-                  e.currentTarget.src = "https://lh3.googleusercontent.com/aida-public/AB6AXuALLxYx7YJrqORiNwHA4wo1JIkCIxNlsBBpy7JaDhVBcvSlqA4D9oNMm_pKJKLyMeLmpUJVRaY5yfA-yK74UgFLj3GLmoS_IrPoMZcN1k7c8SqJK-lRnbS0McYc5Es7cbHL-pKD8EMxg1vO-b4qUrzpzbSZMF9wLCf4MrjGmY6W4YD-jmypBfz8bmf6tDaCNdLFP51G4qLJR_A1t-mC7SrXXvVprx-VMp2j2lPQLpnv7OZmmO3eMhcKFEaKM1sNXyiWDEuI34J9cjY";
-                }}
-              />
-              <div className="absolute bottom-0 left-0 right-0 bg-black/60 py-1">
-                <p className="text-[8px] text-center text-white font-medium uppercase tracking-wider">Source: User</p>
-              </div>
-            </div>
-            
-            <div className="flex-1 flex flex-col justify-between">
-              <div>
-                <p className="text-[9px] font-bold text-slate-500 uppercase tracking-wider mb-1">Visual Analysis</p>
-                <p className="text-sm text-slate-800 leading-tight">
-                  Water depth <span className="font-bold text-[#6366F1]">{zone.aiAnalysis.waterDepth}</span>, {zone.aiAnalysis.currentSpeed}. {zone.aiAnalysis.riskLevel}
-                </p>
-              </div>
-              <div className="bg-slate-50 p-2 rounded-lg mt-2">
-                <p className="text-[9px] font-bold text-slate-500 uppercase tracking-wider mb-0.5">Historical Context</p>
-                <p className="text-xs text-slate-700">{zone.aiAnalysis.historicalContext}</p>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        {/* AI Recommendation */}
-        <div className="bg-[#1E293B] text-white p-5 rounded-3xl shadow-lg">
-          <div className="flex items-center justify-between mb-1">
-            <div className="flex items-center gap-2">
-              <span className="material-symbols-outlined text-[#818CF8]">alt_route</span>
-              <h3 className="font-bold text-sm tracking-wide">AI RECOMMENDATION</h3>
-            </div>
-            <span className="bg-white/10 text-white/80 text-[10px] px-2 py-1 rounded-full font-medium">
-              {isHighRisk ? 'Urgent' : 'Advisory'}
-            </span>
-          </div>
-
-          <p className="text-[10px] text-slate-400 mb-4">
-            Nearest evacuation centres within <span className="text-white font-bold">10 km</span> of this alert zone
-          </p>
-
-          {evacLoading ? (
-            <div className="flex items-center justify-center gap-2 py-6 text-slate-400">
-              <span className="material-symbols-outlined animate-spin text-lg">progress_activity</span>
-              <p className="text-xs">Searching nearby centres…</p>
-            </div>
-          ) : evacCenters.length === 0 ? (
-            <div className="bg-white/5 rounded-2xl p-4 mb-4 text-center">
-              <span className="material-symbols-outlined text-slate-500 text-2xl">location_off</span>
-              <p className="text-xs text-slate-400 mt-1">No places found nearby. Proceed to the nearest school or community hall.</p>
-            </div>
-          ) : (
-            <div className="space-y-2 mb-4">
-              {evacCenters.map((c, i) => {
-                const isSelected = selectedCenter?.placeId === c.placeId;
-                return (
-                  <button
-                    key={c.placeId}
-                    onClick={() => setSelectedCenter(c)}
-                    className={`w-full flex items-center gap-3 p-3 rounded-2xl border transition-all text-left ${
-                      isSelected
-                        ? 'bg-[#6366F1]/20 border-[#6366F1]/60'
-                        : 'bg-white/5 border-white/10 hover:bg-white/10'
-                    }`}
-                  >
-                    {/* Rank badge */}
-                    <div className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 font-bold text-sm ${
-                      i === 0 ? 'bg-green-500 text-white' : 'bg-white/10 text-slate-300'
-                    }`}>{i + 1}</div>
-                    <div className="flex-1 min-w-0">
-                      <p className="text-white text-xs font-bold truncate">{c.name}</p>
-                      <p className="text-slate-400 text-[10px] truncate">{c.address}</p>
-                    </div>
-                    <div className="text-right shrink-0">
-                      <p className={`text-xs font-bold ${i === 0 ? 'text-green-400' : 'text-slate-300'}`}>{c.distanceKm.toFixed(1)} km</p>
-                      {isSelected && <span className="material-symbols-outlined text-[#818CF8] text-sm">check_circle</span>}
-                    </div>
-                  </button>
-                );
-              })}
-            </div>
-          )}
-
-          {zone.notifiedDepts && zone.notifiedDepts.length > 0 && (
-            <div className="mb-4 bg-white/5 p-3 rounded-xl border border-white/10">
-              <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2">Notified Authorities</p>
-              <div className="flex flex-wrap gap-2">
-                {zone.notifiedDepts.map(dept => (
-                  <span key={dept} className="bg-[#ec5b13]/20 text-[#ec5b13] border border-[#ec5b13]/30 px-2 py-1 rounded-md text-xs font-bold">
-                    {dept}
-                  </span>
-                ))}
-              </div>
-            </div>
-          )}
-
-          <button
-            onClick={() => { handleNavigation(); }}
-            disabled={evacLoading}
-            className="group relative w-full overflow-hidden rounded-2xl text-white font-bold transition-all duration-200 active:scale-[0.97] active:brightness-90 disabled:opacity-50"
-            style={{ WebkitTapHighlightColor: 'transparent' }}
-          >
-            {/* Background layers */}
-            <div className="absolute inset-0 bg-gradient-to-r from-[#4338CA] via-[#6366F1] to-[#818CF8]" />
-            <div className="absolute inset-0 bg-gradient-to-b from-white/10 to-transparent" />
-            {/* Shimmer */}
-            <span className="pointer-events-none absolute inset-0 -translate-x-full group-hover:translate-x-full transition-transform duration-700 bg-gradient-to-r from-transparent via-white/20 to-transparent" />
-            {/* Glow */}
-            <div className="absolute -inset-1 bg-[#6366F1]/40 blur-lg opacity-0 group-hover:opacity-100 transition-opacity duration-300 -z-10" />
-
-            {/* Content */}
-            <div className="relative flex items-center justify-between px-5 py-4">
-              {/* Left: pulsing dot + label */}
-              <div className="flex items-center gap-3">
-                <div className="relative w-10 h-10 flex items-center justify-center">
-                  <span className="absolute inset-0 rounded-full bg-white/20 animate-ping" />
-                  <span className="relative w-10 h-10 rounded-full bg-white/20 flex items-center justify-center">
-                    <span className="material-symbols-outlined text-xl">navigation</span>
-                  </span>
+            {grouped.baseline.length > 0 && (
+              <section>
+                <div className="mb-2">
+                  <div className="flex items-center gap-2">
+                    <h2 className="text-gray-500 text-sm font-black tracking-wider">MONITORED LOCATIONS</h2>
+                    <span
+                      className="material-icons-round text-gray-400 text-base cursor-help"
+                      title="These locations are pre-loaded for monitoring. Flood data will appear here when reported by users or sensors."
+                    >
+                      info
+                    </span>
+                  </div>
+                  <p className="text-gray-500 text-xs mt-1">These areas are being monitored. No active flood detected.</p>
                 </div>
-                <div className="text-left">
-                  <p className="text-[10px] font-semibold uppercase tracking-widest text-white/60">Nearest Safe Location</p>
-                  <p className="text-sm font-black leading-tight">
-                    {selectedCenter ? selectedCenter.name : 'Start Navigation'}
-                  </p>
+                <div className="space-y-3">
+                  {grouped.baseline.map((zone) => renderZoneCard(zone, true))}
                 </div>
-              </div>
+              </section>
+            )}
+          </div>
+        )}
 
-              {/* Right: arrow chip */}
-              <div className="flex items-center gap-1.5 bg-white/15 rounded-full px-3 py-1.5 group-hover:bg-white/25 transition-colors duration-200">
-                <span className="text-xs font-bold">Go</span>
-                <span className="material-symbols-outlined text-base transition-transform duration-300 group-hover:translate-x-0.5">arrow_forward</span>
-              </div>
-            </div>
-          </button>
+        <div
+          onClick={onScanClick}
+          className="mt-7 rounded-2xl bg-gray-100 border border-gray-200 p-4 flex items-center gap-3 cursor-pointer hover:bg-gray-200 transition-colors"
+        >
+          <div className="w-11 h-11 rounded-full bg-indigo-600 text-white flex items-center justify-center">
+            <span className="material-icons-round">forum</span>
+          </div>
+          <div className="flex-1">
+            <h4 className="text-gray-900 font-bold text-sm">Join Our Community Discord</h4>
+            <p className="text-gray-500 text-xs">Share flood updates & connect with nearby residents.</p>
+          </div>
+          <span className="material-icons-round text-gray-400">chevron_right</span>
         </div>
       </main>
 

@@ -310,52 +310,11 @@ let monitoringInterval: NodeJS.Timeout | null = null;
 export const startContinuousMonitoring = (zones: Record<string, FloodZone>) => {
   if (monitoringInterval) {
     clearInterval(monitoringInterval);
+    monitoringInterval = null;
   }
 
-  const collectData = () => {
-    // Simulate sensor data collection for each zone
-    Object.values(zones).forEach((zone) => {
-      // Simulate various sensor readings
-      if (zone.severity >= 3) { // Only monitor zones with some risk
-        // Water level sensor
-        saveSensorData({
-          zoneId: zone.id,
-          type: 'water_level',
-          value: zone.severity * 0.1 + Math.random() * 0.2,
-          unit: 'meters',
-          location: zone.center
-        });
-
-        // Rainfall sensor
-        saveSensorData({
-          zoneId: zone.id,
-          type: 'rainfall',
-          value: zone.rainfall + Math.random() * 5,
-          unit: 'mm/hr',
-          location: zone.center
-        });
-
-        // Flow rate sensor
-        saveSensorData({
-          zoneId: zone.id,
-          type: 'flow_rate',
-          value: zone.severity * 2 + Math.random() * 3,
-          unit: 'm³/s',
-          location: zone.center
-        });
-      }
-    });
-
-    console.log(`📊 Collected sensor data for ${Object.keys(zones).length} zones`);
-  };
-
-  // Initial collection
-  collectData();
-
-  // Collect data every 5 minutes
-  monitoringInterval = setInterval(collectData, 5 * 60 * 1000);
-  
-  console.log('🔄 Continuous monitoring started (5-minute intervals)');
+  const realZoneCount = Object.values(zones).filter((zone: any) => zone?.reportId != null).length;
+  console.log(`🔄 Continuous monitoring is passive mode (real zones: ${realZoneCount})`);
 };
 
 /**

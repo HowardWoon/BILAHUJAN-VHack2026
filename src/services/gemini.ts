@@ -149,11 +149,20 @@ const parseRiskScoreValue = (value: unknown): number => {
   return 0;
 };
 
+const deriveConfidenceFromRiskScore = (riskScore: number): number => {
+  if (riskScore <= 2 || riskScore >= 8) return 88;
+  return 70;
+};
+
 const normalizeFloodAnalysisResult = (input: Partial<FloodAnalysisResult>): FloodAnalysisResult => {
   const isRelevant = Boolean(input.isRelevant);
   const rawRiskScore = parseRiskScoreValue(input.riskScore);
   const boundedRiskScore = Math.max(0, Math.min(10, Math.round(rawRiskScore)));
   const riskScore = isRelevant ? Math.max(1, boundedRiskScore) : boundedRiskScore;
+  const parsedConfidence = Math.round(parseRiskScoreValue(input.aiConfidence));
+  const aiConfidence = parsedConfidence > 0
+    ? Math.max(0, Math.min(100, parsedConfidence))
+    : deriveConfidenceFromRiskScore(riskScore);
 
   return {
     isRelevant,
@@ -161,7 +170,7 @@ const normalizeFloodAnalysisResult = (input: Partial<FloodAnalysisResult>): Floo
     estimatedDepth: input.estimatedDepth?.trim() || '',
     detectedHazards: input.detectedHazards?.trim() || '',
     passability: input.passability?.trim() || '',
-    aiConfidence: Math.max(0, Math.min(100, Math.round(input.aiConfidence ?? 0))),
+    aiConfidence,
     directive: input.directive?.trim() || '',
     riskScore,
     severity: isRelevant ? severityLabelFromScore(riskScore) : (input.severity?.trim() || 'NONE'),
@@ -474,14 +483,30 @@ const enforceSeverityGuardrails = (
   if (!result.isRelevant) return result;
 
   const minimumRiskScore = inferMinimumRiskScore(result, classification);
-  if (minimumRiskScore <= result.riskScore) return result;
+  const depthEvidence = [
+    result.estimatedDepth,
+    result.waterDepth,
+    result.detectedHazards,
+    result.directive,
+    result.infrastructureStatus,
+  ].join(' ');
+  const depthMeters = parseMaxMetersFromText(depthEvidence) ?? 0;
+
+  let depthFloor = 1;
+  if (depthMeters >= 1.3) depthFloor = 9;
+  else if (depthMeters >= 0.5) depthFloor = 7;
+  else if (depthMeters >= 0.2) depthFloor = 5;
+  else if (depthMeters >= 0.1) depthFloor = 3;
+
+  const finalMinimum = Math.max(minimumRiskScore, depthFloor);
+  if (finalMinimum <= result.riskScore) return result;
 
   return {
     ...result,
-    riskScore: minimumRiskScore,
-    severity: severityLabelFromScore(minimumRiskScore),
-    humanRisk: minimumRiskScore >= 9 ? 'Critical' : minimumRiskScore >= 7 ? 'High' : minimumRiskScore >= 5 ? 'Moderate' : result.humanRisk,
-    directive: minimumRiskScore >= 7
+    riskScore: finalMinimum,
+    severity: severityLabelFromScore(finalMinimum),
+    humanRisk: finalMinimum >= 9 ? 'Critical' : finalMinimum >= 7 ? 'High' : finalMinimum >= 5 ? 'Moderate' : result.humanRisk,
+    directive: finalMinimum >= 7
       ? 'Severe flood indicators detected. Avoid the area and move to higher ground immediately.'
       : result.directive,
   };
@@ -893,7 +918,10 @@ const applySceneContextCap = (
   if (!result.isRelevant || !scene) return result;
   if (criticalCue?.isCritical) return result;
 
-  if (scene.isNormalWaterbody && !scene.hasFloodDanger && scene.confidence >= 60) {
+  const sceneReason = (scene.reason || '').toLowerCase();
+  const dryScene = /\bdry\b|no\s*water|dry\s*road|normal\s*road/.test(sceneReason);
+
+  if ((scene.isNormalWaterbody || dryScene) && !scene.hasFloodDanger && scene.confidence >= 60) {
     if (result.riskScore <= 2) return result;
     return {
       ...result,
@@ -1263,6 +1291,18 @@ STEP 2: If YES, estimate depth using these physical anchors:
   Kerb = 0.15m | Door sill = 0.30m | Ankle = 0.15m | Knee = 0.50m
   Waist = 1.0m | Car bonnet = 1.0m | Car roof = 1.4m
 
+VISUAL PHYSICAL SCORING REFERENCE (apply strictly):
+  1 = dry ground / no standing water
+  2 = damp surface / puddles only
+  3 = ankle-level pooling (<0.2m)
+  4 = sustained ankle-level on road or walkway
+  5 = shin to low-knee depth (0.2-0.4m)
+  6 = knee depth around vehicles/shops (0.4-0.6m)
+  7 = thigh to waist depth or strong street flow (0.6-1.0m)
+  8 = bonnet-level vehicle submersion or intense current
+  9 = roof-level vehicle impact / people stranded at upper levels
+  10 = only rooftops visible, severe life-threatening inundation
+
 SEVERITY scale (riskScore 1-10):
   1-2 = NORMAL (dry/damp surface)
   3-4 = MINOR  (ankle-deep, <0.2m)
@@ -1271,10 +1311,20 @@ SEVERITY scale (riskScore 1-10):
   9-10 = CRITICAL (car roof or 2nd floor flooded)
 
 HARD FLOOR RULES — never score below these:
-  Car bonnet submerged → riskScore MINIMUM 7
-  Car roof submerged   → riskScore MINIMUM 8
-  Car fully submerged  → riskScore MINIMUM 9
-  People on rooftop / house roof-level flooding / submerged house with only roof visible → riskScore MINIMUM 9
+  Car bonnet submerged / water touching bonnet line → riskScore MINIMUM 7
+  Car roof submerged / water near car roofline      → riskScore MINIMUM 8
+  Car fully submerged                               → riskScore MINIMUM 9
+  People on rooftop / roof-level house flooding     → riskScore MINIMUM 9
+  If only rooftops are visible or rescue is required from upper floors → riskScore MINIMUM 10
+
+Consistency requirement:
+  riskScore, severity, and waterDepth MUST agree with each other.
+  Never output low severity text with high-depth visuals, or vice versa.
+
+Scoring fairness rule:
+  Score ONLY based on what you visually observe in the image.
+  Do not factor in the location name or address in your severity score.
+  The location is provided only for context, not for scoring.
 
 YOU MUST return ONLY the JSON object below. No markdown. No code fences. No text before or after.
 
@@ -1337,6 +1387,12 @@ YOU MUST return ONLY the JSON object below. No markdown. No code fences. No text
       classification,
       sceneContext
     );
+
+    const agreementConfidence = classification?.matchesGuideline ? 0.9 : 0.6;
+    const sceneConfidence = sceneContext ? Math.max(0.5, Math.min(1, (sceneContext.confidence || 60) / 100)) : 0.7;
+    const riskConfidence = finalResult.riskScore <= 2 || finalResult.riskScore >= 8 ? 0.9 : 0.7;
+    const mergedConfidence = Math.round((0.45 * riskConfidence + 0.35 * agreementConfidence + 0.2 * sceneConfidence) * 100);
+    finalResult.aiConfidence = Math.max(finalResult.aiConfidence, mergedConfidence);
 
     console.log('[Gemini][Debug] Fresh scoring:', {
       parsedScore: result.riskScore,

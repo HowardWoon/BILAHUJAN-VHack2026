@@ -288,7 +288,7 @@ const MissionLogPanel = memo(function MissionLogPanel({ className }: MissionLogP
             ) : (
               <span className="w-2 h-2 rounded-full bg-gray-600 flex-shrink-0" />
             )}
-            <span className="font-mono text-xs font-bold text-white truncate">⚡ BILAHUJAN Command Agent</span>
+            <span className="font-mono text-lg font-bold text-white truncate">⚡ BILAHUJAN Command Agent</span>
           </div>
 
           {isRunning ? (
@@ -303,9 +303,9 @@ const MissionLogPanel = memo(function MissionLogPanel({ className }: MissionLogP
         </div>
 
         <div className="flex items-center gap-3 pl-4">
-          <span className="text-gray-600 font-mono text-[10px]">v2.0 · Swarm Intelligence</span>
+          <span className="text-gray-400 font-mono text-sm font-semibold">v2.0 · Swarm Intelligence</span>
           {missionCount > 0 && (
-            <span className="text-gray-600 font-mono text-xs">{missionCount} missions run</span>
+            <span className="text-gray-400 font-mono text-xs font-medium">{missionCount} missions run</span>
           )}
         </div>
         {lastMissionError && (
@@ -543,7 +543,7 @@ const MissionLogPanel = memo(function MissionLogPanel({ className }: MissionLogP
           <div className="px-4 py-2 bg-[#161B22]">
             <span className="text-gray-500 text-xs font-mono font-bold">MISSION HISTORY ({missionLogs.length} missions)</span>
           </div>
-          <div className="max-h-64 overflow-y-auto p-3 space-y-2">
+          <div className="p-3 space-y-2">
             {missionLogs.length === 0 ? (
               <div className="text-gray-700 text-xs font-mono text-center py-4">No missions run yet.</div>
             ) : (

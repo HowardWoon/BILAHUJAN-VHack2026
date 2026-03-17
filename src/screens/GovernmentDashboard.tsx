@@ -9,13 +9,12 @@ import {
   getLocationAnalytics
 } from '../services/governmentAnalytics';
 import { rtdb } from '../firebase';
-import { addFloodZone, createZone, getFloodZones, reconcileStateSeverity } from '../data/floodZones';
-import { fetchLiveWeatherAndCCTV } from '../services/gemini';
 import BottomNav from '../components/BottomNav';
 import { DataExportPanel } from '../components/DataExportPanel';
 import { MissionLogPanel } from '../components/MissionLogPanel';
 import { useLiveNodes, useNodeStats } from '../services/nodeDiscovery';
 import { SensorNode, SwarmNetworkStats } from '../types/swarm';
+import { deduplicateFTName, normalizeStateName, normalizeToTownState } from '../utils/floodCalculations';
 
 interface GovernmentDashboardProps {
   onTabChange: (tab: 'map' | 'report' | 'alert' | 'dashboard') => void;
@@ -44,27 +43,6 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): 
 }
 
 type GovMenu = 'overview' | 'command';
-
-const MALAYSIA_STATE_COORDS: Record<string, [number, number]> = {
-  Selangor: [3.07, 101.51],
-  'Kuala Lumpur': [3.14, 101.69],
-  Kelantan: [6.12, 102.23],
-  Johor: [1.49, 103.74],
-  Penang: [5.35, 100.28],
-  Pahang: [3.81, 103.32],
-  Sarawak: [1.55, 110.35],
-  Sabah: [5.98, 116.07],
-  Perak: [4.59, 101.09],
-  Kedah: [6.12, 100.36],
-  Terengganu: [5.33, 103.15],
-  'Negeri Sembilan': [2.72, 101.94],
-  Melaka: [2.19, 102.25],
-  Perlis: [6.44, 100.2],
-  Putrajaya: [2.92, 101.69],
-  Labuan: [5.28, 115.24]
-};
-
-const MALAYSIA_STATES = Object.keys(MALAYSIA_STATE_COORDS);
 
 const SwarmSection = React.memo(function SwarmSection({ nodes, nodeStats }: SwarmSectionProps) {
   const [selectedNode, setSelectedNode] = useState<SensorNode | null>(null);
@@ -242,68 +220,6 @@ export const GovernmentDashboard: FC<GovernmentDashboardProps> = ({ onTabChange,
   const nodes = useLiveNodes();
   const nodeStats = useNodeStats(nodes);
 
-  const refreshLiveStateWeather = useCallback(async (): Promise<{ updated: number; failed: number }> => {
-    const batchSize = 6;
-    let updated = 0;
-    let failed = 0;
-
-    for (let index = 0; index < MALAYSIA_STATES.length; index += batchSize) {
-      const batch = MALAYSIA_STATES.slice(index, index + batchSize);
-
-      const batchResults = await Promise.allSettled(
-        batch.map(async (state) => {
-          const liveData = await withTimeout(fetchLiveWeatherAndCCTV(state), 12000, `fetchLiveWeatherAndCCTV:${state}`);
-          const [lat, lng] = MALAYSIA_STATE_COORDS[state] ?? [3.14, 101.69];
-          const zoneId = `live_${state.toLowerCase().replace(/\s+/g, '_')}`;
-
-          const allCurrentZones = getFloodZones();
-          const userZonesForState = Object.values(allCurrentZones).filter(
-            (zone) => zone.state === state && zone.id.startsWith('user_reported_')
-          );
-          const userMaxSeverity = userZonesForState.reduce((max, zone) => Math.max(max, zone.severity), 0);
-          const reconciledSeverity = reconcileStateSeverity(
-            liveData.severity,
-            userMaxSeverity,
-            liveData.isRaining,
-            userZonesForState.length
-          );
-
-          const stateZone = createZone(
-            zoneId,
-            state,
-            `Live Weather: ${liveData.weatherCondition}`,
-            state,
-            'Live Region',
-            lat,
-            lng,
-            reconciledSeverity,
-            liveData.weatherCondition,
-            0.05,
-            ['Google Weather', 'CCTV Live', 'AI Analysis']
-          );
-
-          stateZone.aiAnalysisText = liveData.aiAnalysisText;
-          stateZone.eventType = liveData.isRaining ? 'Heavy Rain' : 'Normal';
-          addFloodZone(stateZone);
-        })
-      );
-
-      batchResults.forEach((result) => {
-        if (result.status === 'fulfilled') {
-          updated += 1;
-        } else {
-          failed += 1;
-        }
-      });
-
-      if (index + batchSize < MALAYSIA_STATES.length) {
-        await new Promise((resolve) => setTimeout(resolve, 900));
-      }
-    }
-
-    return { updated, failed };
-  }, []);
-
   const loadDashboardData = useCallback(async (options?: { manual?: boolean }) => {
     const manual = options?.manual ?? false;
     if (manual) {
@@ -357,19 +273,20 @@ export const GovernmentDashboard: FC<GovernmentDashboardProps> = ({ onTabChange,
 
   useEffect(() => {
     loadDashboardData();
-    const interval = setInterval(loadDashboardData, 30000);
-    return () => clearInterval(interval);
+    return;
   }, [loadDashboardData]);
 
   useEffect(() => {
     const zonesRef = ref(rtdb, 'liveZones');
     let debounceTimer: ReturnType<typeof setTimeout>;
 
+    // SYNC: Debounce reduced to 500 ms so the GOV dashboard refreshes within
+    // half a second of any Firebase write from the ALERT screen refresh.
     const unsubscribe = onValue(zonesRef, () => {
       clearTimeout(debounceTimer);
       debounceTimer = setTimeout(() => {
         loadDashboardData();
-      }, 2000);
+      }, 500);
     });
 
     return () => {
@@ -379,6 +296,10 @@ export const GovernmentDashboard: FC<GovernmentDashboardProps> = ({ onTabChange,
   }, [loadDashboardData]);
 
   const displayDrainageEfficiency = useMemo(() => {
+    if ((statistics?.drainageEfficiency ?? 0) > 0) {
+      return statistics?.drainageEfficiency ?? 0;
+    }
+
     if ((infrastructure?.drainageEfficiency ?? 0) > 0) {
       return infrastructure?.drainageEfficiency ?? 0;
     }
@@ -392,27 +313,20 @@ export const GovernmentDashboard: FC<GovernmentDashboardProps> = ({ onTabChange,
       locationAnalytics.length;
 
     return Math.max(0, Math.round(100 - avgDrainageBlockage));
-  }, [infrastructure, locationAnalytics]);
+  }, [statistics, infrastructure, locationAnalytics]);
 
   const locationTable = useMemo(
     () =>
       locationAnalytics.map((loc, index) => {
         const sev = loc.avgSeverity;
         const barColor = sev >= 7 ? 'bg-red-500' : sev >= 4 ? 'bg-amber-400' : 'bg-emerald-400';
-        const cleanedLocation = loc.location
+        const normalizedState = normalizeStateName(loc.state || '') || 'Unknown';
+        const cleanedLocation = String(loc.location || '')
           .replace(/^live\s*weather\s*:?\s*/i, '')
           .replace(/\s+/g, ' ')
           .trim();
-        const escapedState = loc.state.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-        const locationWithoutState = cleanedLocation
-          .replace(new RegExp(`(?:,?\\s*${escapedState})$`, 'i'), '')
-          .replace(/\s+/g, ' ')
-          .replace(/^,\s*|,\s*$/g, '')
-          .trim();
-        const hotspotLabel =
-          locationWithoutState && locationWithoutState.toLowerCase() !== loc.state.trim().toLowerCase()
-            ? locationWithoutState
-            : null;
+        const townState = normalizeToTownState(cleanedLocation || normalizedState);
+        const primaryLabel = deduplicateFTName(townState || `${normalizedState}, ${normalizedState}`);
 
         return (
           <div
@@ -422,19 +336,19 @@ export const GovernmentDashboard: FC<GovernmentDashboardProps> = ({ onTabChange,
             <span className="text-xs font-bold text-slate-300 w-4 text-center shrink-0 tabular-nums">{index + 1}</span>
             <div className={`w-1 h-8 rounded-full ${barColor} shrink-0`} />
             <div className="flex-1 min-w-0">
-              {hotspotLabel ? (
+              {loc.alertZoneId ? (
                 <button
                   type="button"
-                  onClick={() => onLocationAlertOpen(loc.state, loc.alertZoneId || '')}
+                  onClick={() => onLocationAlertOpen(normalizedState, loc.alertZoneId || '')}
                   className="text-sm font-semibold leading-5 text-blue-600 hover:text-blue-700 hover:underline text-left whitespace-normal break-words"
-                  title={`Open AI analysis for ${hotspotLabel} in ${loc.state}`}
+                  title={`Open AI analysis for ${primaryLabel}`}
                 >
-                  {hotspotLabel}
+                  {primaryLabel}
                 </button>
               ) : (
-                <p className="text-sm font-semibold leading-5 text-slate-300">—</p>
+                <p className="text-sm font-semibold leading-5 text-blue-600 whitespace-normal break-words">{primaryLabel}</p>
               )}
-              <p className="text-xs text-slate-400 leading-4 whitespace-normal break-words">{loc.state}</p>
+              <p className="text-xs text-slate-400 leading-4 whitespace-normal break-words">{normalizedState}</p>
             </div>
             <div className="flex flex-col items-end gap-1 shrink-0">
               <div className="flex gap-3">
@@ -466,25 +380,10 @@ export const GovernmentDashboard: FC<GovernmentDashboardProps> = ({ onTabChange,
     setRefreshStatusMessage('Refreshing live weather across Malaysia...');
 
     void (async () => {
-      let result: { updated: number; failed: number } | null = null;
-
-      try {
-        result = await refreshLiveStateWeather();
-      } catch (error) {
-        console.warn('Live weather refresh failed before dashboard analytics refresh', error);
-      }
-
       try {
         setRefreshStatusMessage('Recalculating analytics...');
         await loadDashboardData();
-
-        if (result && result.updated > 0) {
-          setRefreshStatusMessage(`Updated ${result.updated} states${result.failed > 0 ? ` (${result.failed} failed)` : ''}.`);
-        } else if (result && result.failed > 0) {
-          setRefreshStatusMessage('Live refresh failed. Showing cached analytics.');
-        } else {
-          setRefreshStatusMessage('Analytics refreshed.');
-        }
+        setRefreshStatusMessage('Analytics refreshed.');
       } finally {
         setIsManualRefreshing(false);
         window.setTimeout(() => {
@@ -495,7 +394,7 @@ export const GovernmentDashboard: FC<GovernmentDashboardProps> = ({ onTabChange,
         }, 3500);
       }
     })();
-  }, [isManualRefreshing, loadDashboardData, refreshLiveStateWeather]);
+  }, [isManualRefreshing, loadDashboardData]);
 
   const refreshStatusTone = useMemo(() => {
     const status = (refreshStatusMessage || '').toLowerCase();
@@ -549,10 +448,14 @@ export const GovernmentDashboard: FC<GovernmentDashboardProps> = ({ onTabChange,
                 <span className="text-blue-300 font-bold">JPS • NADMA • APM</span>
               </p>
 
+              <p className="text-[11px] text-blue-200/90 mt-3 font-medium">
+                Data sources: Citizen reports · Gemini AI · Weather API · Historical records
+              </p>
+
               {lastUpdated && (
                 <div className="flex items-center gap-1.5 mt-2">
                   <span className="w-2 h-2 bg-green-400 rounded-full animate-pulse" />
-                  <span className="text-blue-200 text-xs">Updated {lastUpdated.toLocaleTimeString()}</span>
+                  <span className="text-blue-200 text-xs">Last updated: {lastUpdated.toLocaleTimeString()}</span>
                 </div>
               )}
             </div>
@@ -712,8 +615,11 @@ export const GovernmentDashboard: FC<GovernmentDashboardProps> = ({ onTabChange,
                 <span className="w-1 shrink-0" />
                 <span className="flex-1 text-[10px] font-semibold text-slate-400 uppercase tracking-wider">Location · State</span>
                 <div className="flex gap-3 shrink-0">
-                  <span className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider w-14 text-center">Incidents</span>
-                  <span className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider w-14 text-center">Severity</span>
+                  {/* FIXED: BUG-5 — "Avg Sev" = average severity across all zones in that location group.
+                    This intentionally differs from the state card badge (which shows MAX severity)
+                    so authorities see both the worst-case signal and the mean signal. */}
+                <span className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider w-14 text-center">Incidents</span>
+                <span className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider w-14 text-center">Avg Sev</span>
                 </div>
               </div>
               <div className="space-y-1.5">{locationTable}</div>
@@ -774,7 +680,8 @@ export const GovernmentDashboard: FC<GovernmentDashboardProps> = ({ onTabChange,
 
               <div className="bg-blue-50 border border-blue-100 rounded-xl p-3 text-center">
                 <span className="text-blue-700 font-bold text-sm">
-                  Average Response Time: <span className="font-medium">{Math.max(1, infrastructure?.responseTime ?? 15)} minutes</span>
+                  {/* FIXED: BUG-6 — Correct pluralisation for response time */}
+                  Average Response Time: <span className="font-medium">{Math.max(1, infrastructure?.responseTime ?? 15)} {Math.max(1, infrastructure?.responseTime ?? 15) === 1 ? 'minute' : 'minutes'}</span>
                 </span>
               </div>
             </div>

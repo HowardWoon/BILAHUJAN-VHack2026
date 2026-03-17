@@ -48,6 +48,7 @@ import { PrivacyNotice } from '../components/PrivacyNotice';
 import { FloodZone, useFloodZones } from '../data/floodZones';
 import { analyzeAudio, AudioAnalysisResult, analyzeLocationRisk, LocationRiskAnalysis } from '../services/gemini';
 import { saveAudioAnalysis } from '../services/dataCollection';
+import { deduplicateFTName } from '../utils/floodCalculations';
 import { isMalaysianLocation, getMalaysiaLocationWarning } from '../utils/locationValidator';
 
 interface MapScreenProps {
@@ -381,7 +382,7 @@ export default function MapScreen({ onScanClick, onTabChange, initialShowLocatio
       return formatCoordinateAddress(lat, lng);
     }
 
-    return displayName;
+    return deduplicateFTName(displayName);
   }, []);
 
   const resolveApproximateLocation = useCallback(async (): Promise<{ lat: number; lng: number; label: string } | null> => {
@@ -517,7 +518,7 @@ export default function MapScreen({ onScanClick, onTabChange, initialShowLocatio
       const lastPrecise = readLastPreciseLocation();
       if (lastPrecise) {
         setCurrentGpsLocation({ lat: lastPrecise.lat, lng: lastPrecise.lng });
-        setCurrentAddress(`Current: ${lastPrecise.address || formatCoordinateAddress(lastPrecise.lat, lastPrecise.lng)}`);
+        setCurrentAddress(`Current: ${deduplicateFTName(lastPrecise.address || formatCoordinateAddress(lastPrecise.lat, lastPrecise.lng))}`);
         return;
       }
 
