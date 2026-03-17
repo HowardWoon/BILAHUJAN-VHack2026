@@ -397,11 +397,11 @@ firebase use kitahack   # → bilahujan-app.web.app    ← DO NOT DEPLOY HERE
 
 ---
 
-## 11) Judging Criteria — Technical (50%)
+## 11) Judging Criteria — Technical 
 
 ---
 
-### 11.1 · AI Implementation Strategy & Configuration *(10%)*
+### 11.1 · AI Implementation Strategy & Configuration 
 
 BILAHUJAN deploys **two Gemini models across four distinct modalities** — each independently configured for its specific emergency response task:
 
@@ -482,7 +482,7 @@ Secondary: gemini-2.5-flash SDK (35s withTimeout)
 
 ---
 
-### 11.2 · Data Strategy & Engineering *(10%)*
+### 11.2 · Data Strategy & Engineering 
 
 BILAHUJAN implements a **5-layer data strategy** handling noise, bias, fallback, caching, and rate limiting — producing clean, trustworthy analytics from noisy citizen-generated input.
 
@@ -547,7 +547,7 @@ Federal Territory duplicate handling:
 
 ---
 
-### 11.3 · Model Performance & Validation *(10%)*
+### 11.3 · Model Performance & Validation 
 
 **Physical Anchor Rubric — embedded in every Gemini prompt:**
 
@@ -594,7 +594,7 @@ Critical override:   applyCriticalVisualOverride() — rooftop always wins
 
 ---
 
-### 11.4 · System Integration *(10%)*
+### 11.4 · System Integration 
 
 **Fully automated 10-step citizen-to-authority pipeline:**
 
@@ -655,7 +655,7 @@ Step 5: "Call NADMA: 03-8064 2400"        ← if all searches fail
 
 ---
 
-### 11.5 · Technical Feasibility & Scalability *(10%)*
+### 11.5 · Technical Feasibility & Scalability 
 
 **BILAHUJAN is live and operational** at [bilahujan-vhack.web.app](https://bilahujan-vhack.web.app) — every feature is verifiable right now.
 
@@ -683,11 +683,11 @@ Step 5: "Call NADMA: 03-8064 2400"        ← if all searches fail
 
 ---
 
-## 12) Judging Criteria — Business (40%)
+## 12) Judging Criteria — Business 
 
 ---
 
-### 12.1 · Market Potential & Demand *(10%)*
+### 12.1 · Market Potential & Demand 
 
 **Segment 1 — Government & Emergency Response (B2G)**
 - 160+ local councils in Malaysia with no unified real-time flood intelligence
@@ -708,7 +708,7 @@ Step 5: "Call NADMA: 03-8064 2400"        ← if all searches fail
 
 ---
 
-### 12.2 · Impact & Social Value *(10%)*
+### 12.2 · Impact & Social Value 
 
 **SDG 9 — Target 9.1: Resilient Infrastructure**
 The decentralised swarm architecture survives the exact failure scenario in Case Study 3. When cell towers fail and cloud systems go offline, BILAHUJAN's hardcoded 16-state fallback and local Firebase RTDB cache keep the platform operational. Citizens continue reporting, the agent continues processing, authorities continue receiving alerts — during the blackout window.
@@ -723,7 +723,7 @@ The 12-pass Gemini pipeline, dual-direction guardrails, and MCP-based swarm arch
 
 ---
 
-### 12.3 · Sustainability *(10%)*
+### 12.3 · Sustainability 
 
 **Cost sustainability:**
 - Firebase Spark (free tier): RM 0/month — handles all RTDB, Firestore, and CDN hosting at current scale
@@ -743,7 +743,7 @@ The 12-pass Gemini pipeline, dual-direction guardrails, and MCP-based swarm arch
 
 ---
 
-### 12.4 · Innovation & Creativity *(10%)*
+### 12.4 · Innovation & Creativity 
 
 **Innovation 1 — Citizens as Drones**
 Case Study 3 uses physical drones as sensor nodes. BILAHUJAN reframes 32 million Malaysian smartphones as the fleet — same swarm coverage, zero hardware cost, zero deployment time, infinite scalability. Every citizen report is a typed `SwarmNode` discoverable by the Command Agent via MCP — no precedent in existing Malaysian flood apps.
