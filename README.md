@@ -369,29 +369,29 @@ The Alert Menu uses **Gemini 2.0 Flash + Google Search grounding** to pull real-
 ┌─────────────────────────────────────────────────────────────────────────┐
 │                      BILAHUJAN Swarm Architecture                       │
 │                                                                         │
-│  ┌──────────────────────────────────────────────────────────────────┐  │
-│  │            Autonomous Command Agent (Gemini 2.0 Flash)           │  │
-│  │  Phase 1: Mission Planning (Chain-of-Thought)                    │  │
-│  │  Phase 2: MCP Tool Execution (7 tools · 800ms inter-step)        │  │
-│  │  Phase 3: Mission Summary + Firebase Persistence                 │  │
-│  └──────────────────┬───────────────────────────────────────────────┘  │
-│                     │  Model Context Protocol (MCP)                    │
-│      ┌──────────────┼──────────────────────┐                           │
-│      │              │                      │                           │
-│  scan_flood_zone  get_zone_status   update_zone_severity               │
-│  get_active_nodes dispatch_alert    get_system_health                  │
-│                   thermal_scan (Haversine geo)                         │
+│  ┌──────────────────────────────────────────────────────────────────┐   │
+│  │            Autonomous Command Agent (Gemini 2.0 Flash)           │   │
+│  │  Phase 1: Mission Planning (Chain-of-Thought)                    │   │
+│  │  Phase 2: MCP Tool Execution (7 tools · 800ms inter-step)        │   │
+│  │  Phase 3: Mission Summary + Firebase Persistence                 │   │
+│  └──────────────────┬───────────────────────────────────────────────┘   │
+│                     │  Model Context Protocol (MCP)                     │
+│      ┌──────────────┼──────────────────────┐                            │
+│      │              │                      │                            │
+│  scan_flood_zone  get_zone_status   update_zone_severity                │
+│  get_active_nodes dispatch_alert    get_system_health                   │
+│                   thermal_scan (Haversine geo)                          │
 │                                                                         │
-│  ┌──────────────────────────────────────────────────────────────────┐  │
-│  │            Decentralised Citizen Swarm Network                   │  │
-│  │   NODE-001 ◉  NODE-002 ◉  NODE-003 ◎  NODE-004 ○  NODE-N ◉     │  │
-│  │   (Every flood report = an active intelligence node)             │  │
-│  └──────────────────────────────────────────────────────────────────┘  │
+│  ┌──────────────────────────────────────────────────────────────────┐   │
+│  │            Decentralised Citizen Swarm Network                   │   │
+│  │   NODE-001 ◉  NODE-002 ◉  NODE-003 ◎  NODE-004 ○  NODE-N ◉     │   │
+│  │   (Every flood report = an active intelligence node)             │   │
+│  └──────────────────────────────────────────────────────────────────┘   │
 │                                                                         │
-│  ┌─────────────────┐  ┌──────────────────────┐  ┌──────────────────┐  │
-│  │  Firebase RTDB  │  │  Gemini 2.5 Flash    │  │ Google Maps API  │  │
-│  │  (live state)   │  │  (12-pass pipeline)  │  │  (37 zones)      │  │
-│  └─────────────────┘  └──────────────────────┘  └──────────────────┘  │
+│  ┌─────────────────┐  ┌──────────────────────┐  ┌──────────────────┐    │
+│  │  Firebase RTDB  │  │  Gemini 2.5 Flash    │  │ Google Maps API  │    │
+│  │  (live state)   │  │  (12-pass pipeline)  │  │  (37 zones)      │    │
+│  └─────────────────┘  └──────────────────────┘  └──────────────────┘    │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -724,20 +724,20 @@ firebase use kitahack   # → bilahujan-app.web.app    ← DO NOT DEPLOY HERE
 
 | Criterion | Coverage | Weight |
 |:---|:---|:---:|
-| **AI Implementation Strategy & Configuration** | Two models · four modalities · 12-pass pipeline · `thinkingBudget: 0` · per-pass temperature + token tuning · Manus-validated agentic architecture | 10% |
-| **Data Strategy & Engineering** | MetMalaysia/JPS live grounding · bias filters · `isValidLocationName()` · `isRealZone()` · 3-tier fallback · 28 seeded records · 10-min intelligent cache | 10% |
-| **Model Performance & Validation** | Physical-anchor severity scale · 14 validated test cases · hard floor rules · dual-direction guardrails · single source of truth severity mapping | 10% |
-| **System Integration** | Full 10-step citizen→agent→authority pipeline · zero manual intervention · real-time Firebase `onValue()` listeners · MCP tool layer | 10% |
-| **Technical Feasibility & Scalability** | 40+ features operational · full TypeScript · modular services · production error handling · 6-phase ASEAN roadmap · GitHub Copilot-assisted development | 10% |
+| **AI Implementation Strategy & Configuration** | Two models · four modalities · 12-pass pipeline · `thinkingBudget: 0` · per-pass temperature + token tuning · Manus-validated agentic architecture | 
+| **Data Strategy & Engineering** | MetMalaysia/JPS live grounding · bias filters · `isValidLocationName()` · `isRealZone()` · 3-tier fallback · 28 seeded records · 10-min intelligent cache | 
+| **Model Performance & Validation** | Physical-anchor severity scale · 14 validated test cases · hard floor rules · dual-direction guardrails · single source of truth severity mapping | 
+| **System Integration** | Full 10-step citizen→agent→authority pipeline · zero manual intervention · real-time Firebase `onValue()` listeners · MCP tool layer | 
+| **Technical Feasibility & Scalability** | 40+ features operational · full TypeScript · modular services · production error handling · 6-phase ASEAN roadmap · GitHub Copilot-assisted development | 
 
 ### Business — 40%
 
 | Criterion | Coverage | Weight |
 |:---|:---|:---:|
-| **Market Potential & Demand** | 32M Malaysian users · 160+ local councils · RM5B+ insurance market · ASEAN expansion | 10% |
-| **Impact & Social Value** | SDG 9.1 + 9.5 + 3.d mapped · 200,000+ Malaysians protected · Malay-language cue detection | 10% |
-| **Sustainability** | RM0/month at MVP · no model retraining · modular prompt versioning · hardcoded seed fallback | 10% |
-| **Innovation & Creativity** | Citizens-as-drones model · physical anchor scoring · dual guardrails · `isRealZone()` data integrity · MCP as emergency standard · Gemini + Manus multi-platform agentic stack | 10% |
+| **Market Potential & Demand** | 32M Malaysian users · 160+ local councils · RM5B+ insurance market · ASEAN expansion | 
+| **Impact & Social Value** | SDG 9.1 + 9.5 + 3.d mapped · 200,000+ Malaysians protected · Malay-language cue detection | 
+| **Sustainability** | RM0/month at MVP · no model retraining · modular prompt versioning · hardcoded seed fallback | 
+| **Innovation & Creativity** | Citizens-as-drones model · physical anchor scoring · dual guardrails · `isRealZone()` data integrity · MCP as emergency standard · Gemini + Manus multi-platform agentic stack | 
 
 ---
 
