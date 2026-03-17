@@ -65,7 +65,7 @@ BILAHUJAN is built by a four-person multidisciplinary team from Universiti Sains
 | **Howard Woon Hao Zhe** | Lead Software Engineer & AI Integrator — full technical build, Gemini multi-pass pipeline, MCP tool registry, Command Agent, Firebase architecture, Google Maps integration |
 | **Sanjay Mukojima Ravindran** | Front-End Engineer & UX Architect — UI design execution, mobile-first layout, human-centred design for high-stress use conditions |
 | **Wong En Sheng** | Marketing Lead & Pitching Strategist — pitching materials, public-facing narrative, SDG impact framing |
-| **Ng Tze Fung** | Technical Documentation Lead & Presentation Designer — system documentation, judge-facing slides, written and visual deliverables |
+| **Ng Tze Fhung** | Technical Documentation Lead & Presentation Designer — system documentation, judge-facing slides, written and visual deliverables |
 
 ---
 
