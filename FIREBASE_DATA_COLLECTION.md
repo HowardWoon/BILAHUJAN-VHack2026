@@ -1,53 +1,185 @@
-# BILAHUJAN 24/7 Data Collection System
+# BILAHUJAN Data Collection & Storage Architecture
 
 ## Overview
-Your BILAHUJAN flood monitoring app now has a comprehensive 24/7 data collection system that automatically collects and stores data in Firebase Database and Firestore.
+BILAHUJAN implements a **real-time, event-driven data collection system** aligned with the Firebase Realtime Database and Firestore. The system is designed for:
+- **Live zone monitoring** (flood incidents, weather baselines, user reports)
+- **Report aggregation** (citizen submissions with geolocation and image analysis)
+- **Government analytics** (state-level statistics, location analytics, infrastructure metrics)
+- **Agent mission logging** (autonomous Command Agent task execution and dispatch records)
 
-## What Was Implemented
+---
 
-### 1. Firebase Configuration (`src/firebase.ts`)
-- ✅ Added Firestore database
-- ✅ Added Realtime Database
-- ✅ Added Cloud Storage
-- All Firebase services are now initialized and ready to use
+## Firebase Data Structure
 
-### 2. Data Collection Service (`src/services/dataCollection.ts`)
-This is the core service that handles all 24/7 data collection. Features include:
+### 1. **Realtime Database (`liveZones`)**
 
-#### **System Heartbeat**
-- Updates every 60 seconds to show the system is active
-- Stored in Realtime Database at `systemHeartbeat/status`
+Each flood zone document contains:
 
-#### **Continuous Monitoring**
-- Collects sensor data every 5 minutes
-- Simulates readings for:
-  - Water levels (meters)
-  - Rainfall (mm/hr)
-  - Flow rate (m³/s)
-- Only monitors zones with severity >= 3
+```json
+{
+  "id": "user_reported_1708123456_abc123",
+  "name": "Chow Kit, Kuala Lumpur",
+  "locationName": "Chow Kit, Kuala Lumpur",
+  "state": "Kuala Lumpur",
+  "lat": 3.1456,
+  "lng": 101.6789,
+  "center": { "lat": 3.1456, "lng": 101.6789 },
+  "severity": 7,
+  "rainfall": 45,
+  "drainageBlockage": 78,
+  "source": "user",
+  "reportId": "report_user_reported_1708123456_abc123_1708123456",
+  "uploadedAt": 1708123456000,
+  "firstReportedAt": 1708123456000,
+  "startTime": "2026-02-17T10:30:00Z",
+  "eventType": "Flash Flood",
+  "waterDepth": "Knee-level",
+  "aiAnalysisText": "...",
+  "aiConfidence": 85,
+  "status": "active",
+  "timestamp": 1708123456000
+}
+```
 
-#### **Automatic Data Collection**
-The system automatically saves:
+**Key Changes (v2.0)**:
+- ✅ `reportId` field links zone to citizen report
+- ✅ `uploadedAt` / `firstReportedAt` timestamps for analytics
+- ✅ `source: "user"` distinguishes real incidents from baselines
+- ✅ `isWeatherFallbackZone` indicator for weather-only zones (not counted in real statistics)
 
-1. **Flood Zones** (`saveFloodZone`)
-   - Saved to both Firestore (historical) and Realtime Database (live)
-   - Collection: `floodZones`
-   - RTDB Path: `liveZones/{zoneId}`
+---
 
-2. **User Reports** (`saveUserReport`)
-   - Includes location, details, image URL, analysis results
-   - Collection: `reports`
-   - RTDB Path: `liveReports/{reportId}`
+### 2. **Realtime Database (`liveReports`)**
 
-3. **Analysis Results** (`saveAnalysisResult`)
-   - Image analysis results from AI
-   - Collection: `analysisResults`
-   - Includes risk level, drainage info, location
+Each citizen report:
 
-4. **Audio Analysis** (`saveAudioAnalysis`)
-   - Voice-based flood reports and analysis
-   - Collection: `audioAnalysis`
-   - Includes location and analysis results
+```json
+{
+  "id": "report_user_reported_1708123456_abc123_1708123456",
+  "zoneId": "user_reported_1708123456_abc123",
+  "state": "Kuala Lumpur",
+  "locationName": "Chow Kit, Kuala Lumpur",
+  "severity": 7,
+  "source": "user",
+  "timestamp": 1708123456000,
+  "description": "Water rising fast at Chow Kit intersection"
+}
+```
+
+---
+
+### 3. **Realtime Database (`agentAlerts`)**
+
+When Command Agent dispatches to authorities:
+
+```json
+{
+  "zoneId": "user_reported_1708123456_abc123",
+  "state": "Kuala Lumpur",
+  "dispatchedAt": 1708123456000,
+  "alertType": "CRITICAL",
+  "recipients": ["JPS", "NADMA", "APM"]
+}
+```
+
+---
+
+### 4. **Cloud Firestore (`reports` collection)**
+
+Long-term archive of all citizen submissions:
+
+```json
+{
+  "state": "Kuala Lumpur",
+  "location": {
+    "lat": 3.1456,
+    "lng": 101.6789,
+    "address": "Chow Kit, Kuala Lumpur"
+  },
+  "analysisResult": { /* Gemini AI response object */ },
+  "timestamp": 1708123456000,
+  "severity": 7,
+  "source": "user",
+  "zoneId": "user_reported_1708123456_abc123",
+  "reportId": "report_...",
+  "reportCount": 1
+}
+```
+
+---
+
+## Data Collection Services
+
+### 1. **dataCollection.ts** — Passive Monitoring
+
+```typescript
+export const startContinuousMonitoring = (zones: Record<string, FloodZone>) => {
+  const realZoneCount = Object.values(zones)
+    .filter((zone: any) => zone?.reportId != null)
+    .length;
+  
+  console.log(`🔄 Continuous monitoring is passive mode (real zones: ${realZoneCount})`);
+};
+```
+
+**Status**: System operates in **passive mode** — it no longer simulates sensor data. Real zones are counted only when they have a `reportId` (user-reported).
+
+### 2. **governmentAnalytics.ts** — Real-Time Dashboard
+
+Computes:
+- **Total Incidents** = count of real zones (severity >= 2 + reportId present)
+- **Average Severity** = mean severity across real zones only
+- **Affected Areas** = count of unique states
+- **Drainage Efficiency** = 100 - (average blockage × severity ratio)
+- **Avg Response Time** = from first report to agent dispatch
+
+**Filters out**:
+- ❌ Weather baselines (`isWeatherFallbackZone: true`)
+- ❌ Seed zones (`source: "baseline"` or `"seed"`)
+- ❌ Zones with `severity < 2`
+
+---
+
+## Location Name Normalization
+
+All places are normalized using `normalizeToTownState()`:
+
+```typescript
+// Input: "5, Jalan Tun Perak, 50050, Kuala Lumpur, Malaysia"
+// Output: "Chow Kit, Kuala Lumpur"
+```
+
+**Utility**: `src/utils/floodCalculations.ts`
+- `normalizeStateName()` — state name standardization
+- `deduplicateFTName()` — fixes "Kuala Lumpur, Kuala Lumpur" → "Kuala Lumpur"
+- `normalizeToTownState()` — full address to "Town, State" format
+- `trimToCity()` — fallback for display
+
+---
+
+## Report Submission Flow
+
+1. **User uploads photo** → ReportScreen
+2. **Gemini analyzes image** → `analyzeFloodImage()` in gemini.ts
+3. **Result saved to Firebase** → `liveZones/{zoneId}` + `liveReports/{reportId}`
+4. **Government Dashboard updates** → real-time listeners sync analytics
+5. **If severity >= 7** → Command Agent dispatches → `agentAlerts/{zoneId}`
+
+---
+
+## Data Cleanup Utilities
+
+**File**: `src/utils/cleanupSeedZones.ts`
+
+Maintenance functions:
+
+```typescript
+await purgeHardcodedSeedZones();          // Remove baseline zones
+await fixFederalTerritoryDuplicates();     // "Kuala Lumpur, Kuala Lumpur" → "Kuala Lumpur"
+await deduplicateBaselineZones();          // Remove duplicate monitoring zones
+await resetBaselineSeverities();           // Baseline zones always severity 1
+await migrateLocationNames();              // Re-geocode and update location names
+```
 
 5. **Sensor Data** (`saveSensorData`)
    - High-frequency sensor readings

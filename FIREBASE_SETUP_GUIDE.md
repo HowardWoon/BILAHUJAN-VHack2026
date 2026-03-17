@@ -1,40 +1,93 @@
-# Firebase Setup Guide for BILAHUJAN 24/7 Data Collection
+# Firebase Setup Guide for BILAHUJAN
 
-## Quick Setup Steps
+## Overview
+BILAHUJAN uses **Firebase Realtime Database** for live flood zone monitoring and **Cloud Firestore** for long-term report archiving. This guide explains the setup and monitoring strategy.
 
-### 1. Enable Firestore Database
+---
 
-1. Go to [Firebase Console](https://console.firebase.google.com/)
-2. Select your project: **bilahujan-app**
-3. Click on **Firestore Database** in the left menu
-4. Click **Create database**
-5. Choose **Start in test mode** (for development)
-6. Select your region (choose closest to Malaysia, e.g., `asia-southeast1`)
-7. Click **Enable**
+## Quick Setup
 
-### 2. Enable Realtime Database
+### 1. Prerequisites
+- Firebase project created (e.g., `bilahujan-vhack`)
+- Node.js 18+
+- `.env` file with `VITE_GEMINI_API_KEY` and `VITE_GOOGLE_MAPS_API_KEY`
 
-1. In Firebase Console, click on **Realtime Database** in the left menu
-2. Click **Create Database**
-3. Choose your database location: `asia-southeast1` or closest to Malaysia
-4. Start in **Test mode** (for development)
-5. Click **Enable**
+### 2. Install Dependencies
+```bash
+npm install
+npm install firebase
+```
 
-### 3. Update Database Rules (Important for Production!)
+### 3. Verify Firebase Configuration
+The app initializes Firebase automatically on startup. Check your browser console for:
+```
+✅ Firebase initialized for project: bilahujan-vhack
+```
 
-#### Firestore Rules (Test Mode - DO NOT USE IN PRODUCTION)
-```javascript
-rules_version = '2';
-service cloud.firestore {
-  match /databases/{database}/documents {
-    match /{document=**} {
-      allow read, write: if request.time < timestamp.date(2026, 3, 26);
-    }
+---
+
+## Database Structure
+
+### Realtime Database (`/liveZones`)
+**Real-time flood zones** — updates every 500ms when new reports arrive.
+
+```json
+{
+  "user_reported_1708123456_abc123": {
+    "id": "user_reported_1708123456_abc123",
+    "name": "Chow Kit, Kuala Lumpur",
+    "state": "Kuala Lumpur",
+    "lat": 3.1456,
+    "lng": 101.6789,
+    "severity": 7,
+    "reportId": "report_...",
+    "uploadedAt": 1708123456000,
+    "startTime": "2026-02-17T10:30:00Z",
+    "source": "user"
   }
 }
 ```
 
-#### Realtime Database Rules (Test Mode - DO NOT USE IN PRODUCTION)
+### Realtime Database (`/liveReports`)
+**All citizen reports** — indexed by report ID, linked to zones via `zoneId`.
+
+### Realtime Database (`/agentAlerts`)
+**Agent dispatch records** — when Command Agent notifies authorities.
+
+### Firestore Collection (`reports`)
+**Historical archive** of all reports for analytics and compliance.
+
+---
+
+## Database Rules
+
+### Production (Realtime Database)
+
+```json
+{
+  "rules": {
+    "liveZones": {
+      ".read": true,
+      ".write": "auth.uid != null && root.child('mods').child(auth.uid).exists()",
+      "$zoneId": {
+        ".validate": "newData.hasChildren(['id', 'state', 'lat', 'lng', 'severity'])"
+      }
+    },
+    "liveReports": {
+      ".read": true,
+      ".write": "auth !== null"
+    },
+    "agentAlerts": {
+      ".read": "auth.uid != null && root.child('mods').child(auth.uid).exists()",
+      ".write": "auth.uid != null && root.child('mods').child(auth.uid).exists()"
+    },
+    ".read": false,
+    ".write": false
+  }
+}
+```
+
+### Development (Test Mode - 30 days)
 ```json
 {
   "rules": {
@@ -44,40 +97,68 @@ service cloud.firestore {
 }
 ```
 
-**⚠️ WARNING**: These test mode rules allow anyone to read/write your data for 30 days. Update them before going to production!
+⚠️ **ALWAYS update rules before production deployment**
 
-### 4. Install Required Dependencies
+---
 
-Make sure Firebase is installed:
+## Monitoring Real-Time Updates
+
+### Check Live Zones
+1. Open [Firebase Console](https://console.firebase.google.com/)
+2. Select `bilahujan-vhack` project
+3. Go to **Realtime Database**
+4. Click `liveZones` → view all active zones
+5. New zones appear within 1 second of submission
+
+### Check Reports
+- Navigate to `liveReports` 
+- Each report ID links to a `zoneId`
+- Search by state to filter incidents
+
+---
+
+## Deployment Verification
+
+After `npm run deploy`:
+
 ```bash
-npm install firebase
+firebase hosting:channel:list
 ```
 
-### 5. Verify Installation
-
-1. Start your app:
-```bash
-npm run dev
+Verify your app is live at:
+```
+https://bilahujan-vhack.web.app
 ```
 
-2. Open browser console (F12)
-3. Look for these messages:
-   - `🔄 Initializing 24/7 data collection system...`
-   - `✅ Data collection system active`
-   - `🚀 BILAHUJAN 24/7 Data Collection Active`
-   - `🔄 Continuous monitoring started (5-minute intervals)`
+Test data collection:
+1. Open the website
+2. Submit a test report from ReportScreen
+3. Go to Firebase Console → `liveZones` → verify zone appears
 
-### 6. Check Data is Being Collected
+---
 
-#### Check Heartbeat (within 1 minute):
-1. Open Firebase Console → Realtime Database
-2. Navigate to `systemHeartbeat/status`
-3. You should see:
-```json
-{
-  "lastUpdate": "2026-02-26T...",
-  "status": "active",
-  "timestamp": 1708963200000
+## Troubleshooting
+
+| Issue | Solution |
+|:---|:---|
+| **"Permission denied on read of /liveZones"** | Check database rules — must allow `.read: true` for public access |
+| **Reports not appearing in Firebase** | Verify `VITE_GEMINI_API_KEY` is set; check browser console for errors |
+| **"CORS error with Gemini API"** | Not a CORS issue — Gemini API is called from backend only (via ReportScreen) |
+| **Zones not appearing on map** | Check Government Dashboard — it filters real zones (severity >= 2 + reportId present) |
+
+---
+
+## Data Retention
+
+- **Live Zones**: Kept until severity = 1 or 30 days elapsed
+- **Reports**: Archived in Firestore permanently
+- **Agent Alerts**: Kept for compliance auditing
+
+---
+
+## Next Steps
+
+See [FIREBASE_DATA_COLLECTION.md](./FIREBASE_DATA_COLLECTION.md) for complete data flow documentation.
 }
 ```
 

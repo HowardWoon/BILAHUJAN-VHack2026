@@ -1,82 +1,296 @@
-# Government Data Sales Package - BILAHUJAN
+# Government Data Intelligence & Analytics Package
 
 ## Overview
-Your BILAHUJAN app now collects anonymized flood data 24/7 and provides analytics tools for government partnerships. This guide explains the data monetization features created for selling flood intelligence to Malaysian government agencies (JPS, NADMA, APM).
+BILAHUJAN collects **anonymized, real-time flood intelligence** from citizen reports and provides government agencies (JPS, NADMA, APM) with a **professional analytics platform** to monitor, predict, and respond to flooding across Malaysia.
 
-## What's Been Implemented
+---
 
-### 1. Privacy Compliance ✅
-- **Privacy Notice Modal**: Shows on first app visit
-  - Clearly lists what data IS collected (locations, weather, water levels, photos, timestamps)
-  - Clearly lists what data ISN'T collected (names, phone numbers, personal info)
-  - Mentions government data sharing
-  - Users consent with "I Understand & Continue" button
-  - Uses localStorage to remember consent
-- **File**: `src/components/PrivacyNotice.tsx`
+## Core Features
 
-### 2. Government Analytics Service ✅
-Comprehensive data analysis tools for government presentations:
+### 1. Government Dashboard
+**File**: `src/screens/GovernmentDashboard.tsx`
 
-**Functions Available:**
-- `getFloodStatistics(startDate, endDate)` - Aggregated incident statistics
-- `getLocationAnalytics()` - Area-based performance metrics
-- `getTimeSeriesData(days)` - Historical trends and patterns
-- `getInfrastructureInsights()` - Drainage efficiency and critical zones
-- `exportDataForGovernment(startDate, endDate)` - Complete dataset export
-- `generateCSVReport(startDate, endDate)` - Ready-to-present reports
+Real-time analytics interface with:
+
+| Metric | Source | Update Frequency |
+|:---|:---|:---|
+| **Total Real Incidents** | User reports + real zones | Real-time (500ms debounce) |
+| **Average Severity** | Gemini AI analysis | Real-time |
+| **Affected Areas** | Distinct states with incidents | Real-time |
+| **Drainage Efficiency** | Blockage + rainfall + severity | Real-time |
+| **Most Affected Region** | State-level aggregation | Real-time |
+| **Average Response Time** | First report → agent dispatch | Real-time |
+
+### 2. Location Analytics
+Breakdown of hotspots by town and state:
+
+```json
+[
+  {
+    "location": "Chow Kit, Kuala Lumpur",
+    "state": "Kuala Lumpur",
+    "incidentCount": 3,
+    "avgSeverity": 6.5,
+    "avgWaterLevel": 0.6,
+    "avgDrainageBlockage": 72,
+    "lastIncident": "2026-02-17T10:30:00Z"
+  }
+]
+```
+
+**Used in**: Dashboard location table with severity indicators & click-through to zone details
+
+### 3. Infrastructure Insights
+Real-time capacity and response metrics:
+
+```typescript
+{
+  "drainageEfficiency": 78,          // 0-100%
+  "criticalZones": [ ... ],          // Severity >= 8
+  "maintenanceNeeded": [ ... ],      // High blockage areas
+  "responseTime": 12                 // Minutes (avg)
+}
+```
+
+### 4. Data Export Panel
+**File**: `src/components/DataExportPanel.tsx`
+
+Export options:
+- **JSON** — Full structured data with metadata
+- **CSV** — Ready for Excel/Google Sheets pivot tables
+- **Date Range Selection** — Export specific periods (7/30/90 days, 1 year, custom)
+- **Privacy Compliance Badge** — "Anonymized & Compliant" indicator
+
+---
+
+## Data Collection & Privacy
+
+### ✅ What We Collect (Anonymized)
+```
+• Geographic coordinates (lat, lng) of flood incidents
+• Water depth estimates (ankle, knee, chest, roof level)
+• Rainfall rates (mm/hr)
+• Drainage blockage percentage
+• Flood event timestamps
+• Citizen-submitted photos (visual analysis only)
+• AI confidence scores for predictions
+• Infrastructure impacts (roads, buildings)
+• Historical flood patterns
+```
+
+### ❌ What We DON'T Collect (User Privacy Protected)
+```
+✗ User names or personal identities
+✗ Phone numbers
+✗ Email addresses or contact info
+✗ Personal device identifiers
+✗ IP addresses
+✗ Individual location history
+✗ Facial recognition data
+✗ Any PII (Personally Identifiable Information)
+```
+
+### Privacy Notice
+**File**: `src/components/PrivacyNotice.tsx`
+
+Shown on first visit. Users confirm:
+- "I understand data is shared with JPS, NADMA, and APM"
+- "I understand data collection is for emergency response"
+- Consent stored in `localStorage` (expires every 90 days)
+
+---
+
+## Real Zone vs. Baseline Filtering
+
+The system distinguishes **real incidents** from **baseline monitoring**:
+
+### Real Incidents (Counted in Analytics)
+✅ User-reported with `reportId` field
+✅ Severity >= 2
+✅ `source: "user"` 
+✅ `isWeatherFallbackZone: false`
+
+**Example**:
+```json
+{
+  "id": "user_reported_1708123456_abc123",
+  "severity": 7,
+  "reportId": "report_...",
+  "source": "user",
+  "isWeatherFallbackZone": false
+}
+```
+
+### Baseline Monitoring (Excluded from Real Statistics)
+❌ No `reportId` field
+❌ `source: "baseline"` or `"seed"`
+❌ `isWeatherFallbackZone: true`
+❌ Severity = 1
+
+These zones provide **precautionary baseline weather monitoring** for each state but don't count as incidents.
+
+---
+
+## Analytics Functions
 
 **File**: `src/services/governmentAnalytics.ts`
 
-### 3. Data Export Utilities ✅
-User-friendly export interface:
-- **JSON Export**: Full structured data for analysis tools
-- **CSV Export**: Ready for Excel/Google Sheets
-- **Date Range Selection**: Export specific time periods
-- **Privacy Badge**: Shows data is anonymized and compliant
-- **File**: `src/components/DataExportPanel.tsx`
+### getFloodStatistics(startDate, endDate)
 
-### 4. Government Dashboard ✅
-Professional analytics dashboard for government officials:
-
-**Features:**
-- Summary cards (Total Incidents, Avg Severity, Affected Areas, Drainage Efficiency)
-- Most Affected Region highlight
-- Location Analytics Table (top 10 locations with incident counts)
-- Infrastructure Insights (critical zones, maintenance needs, response times)
-- Time range selector (7 days, 30 days, 90 days, 1 year)
-- Integrated export panel
-- Real-time data refresh
-
-**File**: `src/screens/GovernmentDashboard.tsx`
-
-## What Data Is Collected
-
-### ✅ Collected (Anonymous)
-- Geographic locations (latitude/longitude of flood areas)
-- Weather conditions (rainfall, wind, temperature)
-- Water levels and severity ratings
-- Drainage blockage percentages
-- Terrain types (urban, river, coastal)
-- Historical flood patterns
-- Photos of flood conditions
-- Timestamps of incidents
-- Audio analysis results
-
-### ❌ NOT Collected (Protected)
-- User names or identities
-- Phone numbers
-- Email addresses
-- Personal information
-- Precise location history of individuals
-- IP addresses of users
-
-## How to Use for Government Sales
-
-### Step 1: Access the Dashboard
-The government dashboard is available at:
+Returns:
+```typescript
+{
+  totalIncidents: number,         // Real zones only
+  averageSeverity: number,        // Mean across real zones
+  affectedAreas: number,          // Unique states
+  mostAffectedRegion: string,     // State with highest count/severity
+  drainageEfficiency: number,     // 0-100%
+  avgResponseTime: number,        // Minutes
+  timeRange: { start, end }
+}
 ```
-https://bilahujan-app.web.app/government-dashboard
+
+### getLocationAnalytics()
+
+Returns array of location hotspots:
+```typescript
+[
+  {
+    location: "Town, State",
+    state: "State",
+    alertZoneId: "zone_id",
+    incidentCount: number,
+    avgSeverity: number,
+    avgWaterLevel: number,
+    avgDrainageBlockage: number,
+    lastIncident: Date
+  }
+]
 ```
+
+### getInfrastructureInsights()
+
+Returns:
+```typescript
+{
+  drainageEfficiency: number,        // %
+  criticalZones: Zone[],             // Severity >= 8
+  maintenanceNeeded: Zone[],         // High blockage
+  responseTime: number               // Minutes AVG
+}
+```
+
+### getTimeSeriesData(days)
+
+Historical trends over N days:
+```typescript
+[
+  {
+    date: "2026-02-17",
+    incidentCount: 3,
+    avgSeverity: 5.2,
+    totalRainfall: 45,
+    avgDrainage: 68
+  }
+]
+```
+
+---
+
+## Zone Detail Screen
+
+**File**: `src/screens/ZoneDetailScreen.tsx`
+
+When government official clicks on a zone:
+
+| Section | Data Shown |
+|:---|:---|
+| **Hero Card** | Location · Severity Badge · Peak Prediction |
+| **Timeline** | From Report → Dispatch timestamps |
+| **Metrics** | Drainage · Rainfall · AI Confidence |
+| **AI Analysis** | Gemini visual assessment · risk rating |
+| **Evacuation** | Nearby centers (Google Places API) |
+| **Historical** | Past floods in same location · risk score |
+
+---
+
+## Real-Time Updates
+
+All analytics update via Firebase listeners:
+
+```typescript
+// Dashboard syncs every report
+const unsubscribe = onValue(ref(rtdb, 'liveZones'), () => {
+  loadDashboardData();  // 500ms debounce
+});
+
+// Reports sync when new submission arrives
+const unsubscribe = onValue(ref(rtdb, 'liveReports'), () => {
+  // Update dashboard
+});
+```
+
+---
+
+## Agent Dispatch Tracking
+
+**File**: `src/services/commandAgent.ts`
+
+When Command Agent notifies authorities:
+
+```json
+{
+  "agentAlerts": {
+    "user_reported_1708123456_abc123": {
+      "zoneId": "user_reported_1708123456_abc123",
+      "dispatchedAt": 1708123456000,
+      "alertType": "CRITICAL",
+      "recipients": ["JPS", "NADMA", "APM"]
+    }
+  }
+}
+```
+
+Used for analytics: `avgResponseTime = Math.avg(dispatchedAt - firstReportedAt)`
+
+---
+
+## Data Export for Government
+
+### CSV Format
+```
+date,location,state,severity,incidentCount,avgWaterLevel,drainageBlockage
+2026-02-17,Chow Kit Kuala Lumpur,Kuala Lumpur,7,3,0.6m,72%
+2026-02-17,Petaling Jaya,Selangor,5,2,0.3m,55%
+```
+
+### JSON Format
+Complete object export with all metrics and metadata for integration with government BI tools.
+
+---
+
+## Government Stakeholder Access
+
+### Who Can Access
+- JPS (Department of Irrigation & Drainage) — water level data
+- NADMA (National Disaster Management) — incident tracking
+- APM (Civil Defence) — evacuation coordination
+
+### Access Method
+Dashboard at: `https://bilahujan-vhack.web.app`
+- **Tab**: "Dashboard" (bottom navigation)
+- **Role**: Read-only citizens can see aggregated, non-sensitive data
+- **Full Access**: Government officials get API keys for programmatic access (future phase)
+
+---
+
+## Compliance & Data Governance
+
+✅ **Anonymization**: No personal identifiers in any export
+✅ **Real-Time Monitoring**: Live infrastructure insights
+✅ **Audit Trail**: All exports timestamped and logged
+✅ **Disaster Focus**: Data used ONLY for emergency response
+✅ **60-Day Retention**: Historical data archived; real-time data expires when severity returns to baseline
 
 **Note**: You'll need to add a route in `App.tsx` to access it:
 ```tsx

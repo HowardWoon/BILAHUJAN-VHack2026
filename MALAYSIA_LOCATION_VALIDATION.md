@@ -1,53 +1,190 @@
-# Malaysia Location Validation - Implementation Summary
+# Malaysia Location Validation & Normalization
 
 ## Overview
-All text input fields in BILAHUJAN now validate that users are entering Malaysian locations. When a non-Malaysian location is detected (like "ksa" for Saudi Arabia, or "Singapore"), a warning message is displayed immediately.
+BILAHUJAN implements **strict Malaysian location validation** across all user input fields and **automatic location normalization** to ensure consistent display across the platform.
 
-## Validated Input Fields
+---
 
-### 1. **MapScreen - Main Search Bar** ✅
-- **Location**: Top of map screen
-- **Usage**: Search for flood zones by location
-- **Validation**: Real-time as user types
-- **Warning Display**: Red banner below search bar
+## Validation System
 
-### 2. **MapScreen - Scan Location Modal** ✅
-- **Location**: Modal popup when user clicks "Scan Near Me"
-- **Usage**: Enter location before scanning
-- **Validation**: Real-time as user types
-- **Warning Display**: Red banner below input field in modal
+### Input Fields with Validation
 
-### 3. **MapScreen - Selection Mode Search** ✅
-- **Location**: Search bar during location selection mode
-- **Usage**: Search while selecting scan location
-- **Validation**: Real-time as user types
-- **Warning Display**: Red banner below search bar
+| Screen | Field | Validation | Error Handling |
+|:---|:---|:---|:---|
+| **ReportScreen** | Location search bar | Must be Malaysian location | Red warning banner + search disabled |
+| **ReportScreen** | Map click selection | Geocodes coordinates to Malaysian address | Falls back to coordinates if outside MY |
+| **MapScreen** | Search bar | Must be Malaysian location | Red warning banner |
 
-### 4. **ReportScreen - Location Search** ✅
-- **Location**: "Confirm Location" section of report form
-- **Usage**: Search for flood report location
-- **Validation**: Real-time as user types
-- **Warning Display**: Red banner below search input
+### Accepted Patterns ✅
+```
+✅ Malaysian States: Johor, Selangor, Penang, Kuala Lumpur, Sabah, Sarawak, etc.
+✅ Major Cities: Kuala Lumpur, Johor Bahru, Ipoh, George Town, Kota Kinabalu, Kuching
+✅ Towns: Kajang, Klang, Ampang, Cheras, Puchong, Subang Jaya, Shah Alam
+✅ Landmarks: Petronas Twin Towers, Masjid Jamek, Marina Bay Sand
+✅ Common Areas: Tasek Jaya, Bandar Sri Damansara, Taman Jaya
+```
 
-## How Validation Works
+### Rejected Patterns ❌
+```
+❌ Foreign Countries: Singapore, Indonesia, Thailand, USA, UK
+❌ Foreign Cities: Jakarta, Bangkok, Manila, Tokyo, Dubai, Hong Kong
+❌ Country Codes: SG, ID, TH, CN, JP, KR, US, UK
+❌ Non-Malaysian Words: "pizza", "restaurant", "hospital" (unless part of MY location)
+```
 
-### Accepted Locations (Examples)
-✅ **Malaysian States**: Johor, Selangor, Penang, Kuala Lumpur, Sabah, Sarawak, etc.
+---
 
-✅ **Major Cities**: Kuala Lumpur, Johor Bahru, Ipoh, George Town, Kota Kinabalu, Kuching, Shah Alam, Petaling Jaya, etc.
+## Location Normalization
 
-✅ **Common Areas**: Kajang, Klang, Ampang, Cheras, Puchong, Subang Jaya, Cyberjaya, Damansara, etc.
+### Transform Function
+`normalizeToTownState(fullAddress, geocodeComponents)` → "Town, State"
 
-✅ **Common Malaysian Words**: Taman, Jalan, Kampung, Kuala, Sungai, Bukit, Batu, Teluk, Pantai, Bandar, etc.
+**Input → Output Examples:**
 
-### Rejected Locations (Examples)
-❌ **Country Names**: Singapore, Indonesia, Thailand, China, USA, UK, Australia, etc.
+| Input | Output |
+|:---|:---|
+| `"5, Jalan Tun Perak, 50050, Kuala Lumpur, Malaysia"` | `"Chow Kit, Kuala Lumpur"` |
+| `"Johor Bahru, Johor"` | `"Johor Bahru, Johor"` |
+| `"Kuala Lumpur, Kuala Lumpur"` | `"Kuala Lumpur"` (deduplicated) |
+| `"Putrajaya, Putrajaya"` | `"Putrajaya"` (deduplicated) |
+| `"Labuan, Labuan"` | `"Labuan Town"` (deduplicated) |
+| `"George Town, Pulau Pinang"` | `"George Town, Penang"` |
+| `"21500, Klang"` | `"Klang, Selangor"` |
 
-❌ **Foreign Cities**: Singapore, Jakarta, Bangkok, Manila, Tokyo, Dubai, Hong Kong, etc.
+**Location stored in Firebase:**
+```json
+{
+  "locationName": "Chow Kit, Kuala Lumpur",
+  "state": "Kuala Lumpur"
+}
+```
 
-❌ **Country Codes**: SG, ID, TH, CN, JP, KR, US, UK, etc.
+---
 
-❌ **Saudi Arabia**: KSA, Saudi, Arabia, Riyadh, Jeddah, Mecca, Medina, Dammam
+## Utility Functions
+
+**File**: `src/utils/floodCalculations.ts`
+
+```typescript
+// Normalize state names (handles variations)
+export const normalizeStateName = (raw: string): string
+// Example: "Pulau Pinang" → "Penang"
+
+// Fix federal territory duplicates
+export const deduplicateFTName = (locationName: string): string
+// Example: "Kuala Lumpur, Kuala Lumpur" → "Kuala Lumpur"
+
+// Full address to "Town, State" format
+export const normalizeToTownState = (
+  fullAddress: string,
+  geocodeComponents?: AddressComponent[]
+): string
+// Uses Google Geocode API results to extract town and state
+
+// Get capital of state
+export const getMainTown = (state: string): string
+// Example: "Johor" → "Johor Bahru", "Selangor" → "Shah Alam"
+```
+
+---
+
+## Validation Workflow
+
+### 1. **User enters location** (ReportScreen)
+```typescript
+if (!isMalaysianLocation(searchQuery)) {
+  setLocationWarning(getMalaysiaLocationWarning());
+  return;
+}
+```
+
+### 2. **Geocode address to coordinates**
+```typescript
+const response = await fetch(
+  `https://maps.googleapis.com/maps/api/geocode/json`
+  + `?address=${encodeURIComponent(query)},Malaysia`
+  + `&region=MY&components=country:MY`
+  + `&key=${VITE_GOOGLE_MAPS_API_KEY}`
+);
+```
+
+### 3. **Extract and normalize components**
+```typescript
+const components = response.results[0].address_components;
+const locationName = normalizeToTownState(
+  response.results[0].formatted_address,
+  components
+);
+const state = normalizeStateName(
+  components.find(c => c.types.includes('administrative_area_level_1'))?.long_name
+);
+```
+
+### 4. **Store in zone**
+```json
+{
+  "locationName": "Chow Kit, Kuala Lumpur",
+  "state": "Kuala Lumpur",
+  "lat": 3.1456,
+  "lng": 101.6789
+}
+```
+
+---
+
+## Government Dashboard Filtering
+
+The dashboard **uses locationName for display**:
+
+```typescript
+const location = normalizeToTownState(loc.location || '', locationAnalytics.components);
+const primaryLabel = deduplicateFTName(townState);
+```
+
+This ensures all zones are displayed in consistent "Town, State" format.
+
+---
+
+## Malaysian Town Registry
+
+**File**: `src/utils/floodCalculations.ts`
+
+Pre-defined towns for each state aid in normalization:
+
+```typescript
+export const MALAYSIA_TOWNS: Record<string, string[]> = {
+  'Johor': ['Johor Bahru', 'Batu Pahat', 'Muar', 'Kluang', ...],
+  'Selangor': ['Shah Alam', 'Petaling Jaya', 'Klang', ...],
+  'Kuala Lumpur': ['Chow Kit', 'Titiwangsa', 'Kepong', ...],
+  // ... 16 states total
+};
+```
+
+When ReportScreen receives a coordinate without a town name, the system:
+1. Searches MALAYSIA_TOWNS for matching location
+2. Falls back to geocoding API
+3. Uses state capital as last resort
+
+---
+
+## Testing Location Validation
+
+### Test Malaysian Locations (Should Pass)
+```
+✅ Kuala Lumpur
+✅ Petaling Jaya, Selangor
+✅ Johor Bahru
+✅ George Town, Penang
+✅ Chow Kit
+```
+
+### Test Non-Malaysian Locations (Should Fail)
+```
+❌ Singapore
+❌ Bangkok
+❌ Jakarta
+❌ Hong Kong
+```
 
 ### Validation Logic
 1. **Empty/Short Input**: Valid (user still typing)

@@ -1,53 +1,259 @@
-# BILAHUJAN - Map Screen Flutter Implementation
+# Map Screen - React Implementation
 
-Here is the complete, production-ready Flutter code for your Map Screen. It includes the Google Maps integration, Malaysia camera bounds, severity-based polygon color coding, and the interactive bottom sheet.
+## Overview
+The Map Screen is the **primary interface** for BILAHUJAN users to visualize live flood zones, search for incidents, and upload reports. It's built with **React**, **Google Maps API**, and **Tailwind CSS** — optimized for mobile-first use during emergencies.
 
-### 1. Dependencies (`pubspec.yaml`)
-Add these to your `pubspec.yaml` file:
-```yaml
-dependencies:
-  flutter:
-    sdk: flutter
-  google_maps_flutter: ^2.6.0
-  # Optional: for getting user's actual location
-  geolocator: ^12.0.0 
+---
+
+## File Structure
+```
+src/screens/
+  MapScreen.tsx                      (Main component)
+  
+src/components/
+  StatusBar.tsx                      (Header)
+  BottomNav.tsx                      (Tab navigation)
+  
+src/services/
+  gemini.ts                          (AI image analysis)
+  dataCollection.ts                  (Realtime monitoring)
+  
+src/data/
+  floodZones.ts                      (Zone management)
+  officialLogos.ts                   (Government logos)
 ```
 
-### 2. Data Model & Service (`lib/services/flood_data_service.dart`)
+---
 
-```dart
-import 'package:google_maps_flutter/google_maps_flutter.dart';
+## Key Screens
 
-class FloodZone {
-  final String id;
-  final String name;
-  final List<LatLng> points;
-  final int severity; // 1-10
-  final String forecast;
+### 1. Map Display
+**Component**: `MapScreen.tsx`
 
-  FloodZone({
-    required this.id,
-    required this.name,
-    required this.points,
-    required this.severity,
-    required this.forecast,
+Features:
+- **Live Zone Visualization** — All flood zones as red/orange/yellow markers/circles
+- **Malaysia Bounds** — Map restricted to Malaysia region (auto-center, auto-zoom)
+- **Severity Color Coding**:
+  - 🔴 **Red** (Severity 7-10) — Critical, evacuate
+  - 🟠 **Orange** (Severity 4-6) — Moderate, avoid
+  - 🟡 **Yellow** (Severity 2-3) — Minor, caution
+- **Click Zone Details** — Tap marker → see AlertDetailScreen
+- **Search Bar** — Find location, validates Malaysian location
+- **Location Permission** — Get user's current GPS for context
+
+### 2. Scan Mode
+Users can **scan a nearby location** for flooding:
+
+```typescript
+// User clicks "Scan Near Me" button
+setIsScanning(true)
+
+// Modal appears, user enters location
+// User takes photo → ReportScreen
+```
+
+### 3. Report Submission (ReportScreen)
+**File**: `src/screens/ReportScreen.tsx`
+
+Flow:
+1. **Search location** on embedded map
+2. **Select location** by clicking map pin or searching
+3. **Confirm location** (shows "Town, State" normalized name)
+4. **Take photo** of flood scene
+5. **Select authorities** (JPS, NADMA, APM)
+6. **Submit report** → Firebase upload → Gemini analysis
+
+---
+
+## Data Model
+
+### Flood Zone (Type: FloodZone)
+```typescript
+interface FloodZone {
+  id: string;                          // e.g., "user_reported_1708123456_abc123"
+  name: string;                        // Displayed name
+  locationName: string;                // Normalized: "Town, State"
+  state: string;                       // "Kuala Lumpur", "Selangor", etc.
+  lat: number;
+  lng: number;
+  center: { lat: number; lng: number };
+  severity: number;                    // 1-10 scale
+  rainfall: number;                    // mm/hr estimated
+  drainageBlockage: number;            // % blockage
+  forecast: string;                    // AI prediction text
+  eventType: string;                   // "Flash Flood", "Ponding", etc.
+  waterDepth: string;                  // "Knee-level", "Roof-level", etc.
+  aiAnalysisText: string;              // Gemini analysis
+  aiConfidence: number;                // 0-100%
+  reportId?: string;                   // Links to citizen report
+  source: string;                      // "user" or "baseline"
+  isWeatherFallbackZone?: boolean;     // Baseline weather zone
+  status: string;                      // "active", "warning", "monitor"
+  timestamp: number;                   // Last update time (ms)
+}
+```
+
+---
+
+## Key Functions
+
+### Map Rendering
+```typescript
+// Get all live zones from Firebase
+const zones = useFloodZones();  // Hook from floodZones.ts
+
+// Render each zone as marker + circle
+zones.map(zone => (
+  <MarkerF
+    position={{ lat: zone.lat, lng: zone.lng }}
+    onClick={() => handleZoneClick(zone)}
+    icon={getSeverityIcon(zone.severity)}
+  />
+))
+```
+
+### Location Search
+```typescript
+const handleSearch = (query: string) => {
+  // Validate Malaysian location
+  if (!isMalaysianLocation(query)) {
+    setLocationWarning(getMalaysiaLocationWarning());
+    return;
+  }
+  
+  // Geocode in Malaysia bounds
+  fetchGeocodeResults(query, 'Malaysia');
+}
+```
+
+### Current Location
+```typescript
+// Auto-detect user's GPS location (if permitted)
+if (navigator.geolocation) {
+  navigator.geolocation.getCurrentPosition(position => {
+    setCurrentLocation({
+      lat: position.coords.latitude,
+      lng: position.coords.longitude
+    });
   });
 }
+```
 
-class FloodDataService {
-  /// Placeholder for Google Weather API and JPS Selangor data integration
-  Future<List<FloodZone>> fetchFloodData() async {
-    // Simulating network delay
-    await Future.delayed(const Duration(seconds: 1));
+---
 
-    // Mock Data based on your UI design
-    return [
-      FloodZone(
-        id: 'zone_1',
-        name: 'Masjid Jamek Area',
-        severity: 8,
-        forecast: 'Heavy rain expected for next 2 hours. River levels critical.',
-        points: const [
+## Severity Indicators
+
+### Visual Coding
+| Severity | Color | Icon | Label |
+|:---|:---|:---|:---|
+| 9-10 | 🔴 Dark Red | Crisis Alert | CRITICAL |
+| 7-8 | 🔴 Red | Warning | SEVERE |
+| 5-6 | 🟠 Orange | Flood | MODERATE |
+| 3-4 | 🟡 Yellow | Info | MINOR |
+| 1-2 | 🟢 Green | Check Circle | NORMAL |
+
+### Marker Customization
+```typescript
+const getSeverityIcon = (severity: number) => {
+  if (severity >= 8) return redMarker;     // Critical
+  if (severity >= 5) return orangeMarker;  // Moderate
+  return yellowMarker;                     // Minor
+}
+```
+
+---
+
+## Real-Time Updates
+
+### Firebase Listener
+```typescript
+// Listen for new zones added
+const unsubscribe = onValue(ref(rtdb, 'liveZones'), snapshot => {
+  const zones = snapshot.val();
+  setFloodZones(zones);  // Map re-renders in <2s
+});
+```
+
+### Performance
+- **Update Latency**: 500ms-2s (debounced to avoid flicker)
+- **Zone Limit**: Tested with 100+ zones — smooth on modern devices
+- **Mobile**: Optimized for 4G/5G networks; graceful fallback on slow connections
+
+---
+
+## Location Normalization
+
+All locations displayed as **"Town, State"** format:
+
+```typescript
+import { normalizeToTownState, deduplicateFTName } from '../utils/floodCalculations';
+
+// User selects "5, Jalan Tun Perak, Kuala Lumpur"
+const normalized = normalizeToTownState(address, geocodeComponents);
+// Result: "Chow Kit, Kuala Lumpur"
+
+// Special handling for federal territories
+const deduplicated = deduplicateFTName(normalized);
+// "Kuala Lumpur, Kuala Lumpur" → "Kuala Lumpur"
+```
+
+---
+
+## Accessibility & Responsiveness
+
+### Mobile Optimization
+- ✅ Full-screen map on all screen sizes
+- ✅ Bottom navigation instead of side menu
+- ✅ Touch-friendly buttons (min 44x44 px)
+- ✅ High contrast markers (visible in bright sunlight)
+
+### Map Controls
+- **Zoom**: Pinch to zoom (mobile) / scroll wheel (desktop)
+- **Pan**: Drag map
+- **Search**: Autocomplete from Malaysia towns list
+- **Locate**: "Current Location" button restores zoom to user
+
+---
+
+## Testing
+
+### Local Development
+```bash
+npm run dev
+```
+
+Test zones:
+1. Open app → MapScreen tab
+2. See pre-seeded zones (37 zones across 16 states)
+3. Click zone marker → AlertDetailScreen
+4. Tap "Scan Near Me" → ReportScreen
+5. Submit test report → Zone appears in real-time
+
+### Firebase Verification
+1. Open Firebase Console
+2. Go to `liveZones`
+3. New zones appear <1 second after submission
+4. Map updates within 2 seconds (debounce)
+
+---
+
+## Troubleshooting
+
+| Issue | Cause | Solution |
+|:---|:---|:---|
+| **Map shows blank** | `VITE_GOOGLE_MAPS_API_KEY` not set | Add key to `.env` |
+| **Zones don't appear** | Firebase not initialized | Check browser console for errors |
+| **Search fails** | Non-Malaysian location rejected | Try "Kuala Lumpur" or city name |
+| **Slow updates** | Network latency | Check Firebase read rules |
+
+---
+
+## Future Enhancements
+
+- **AR Visualization** — Overlay flood zones on camera view
+- **Predictive Routing** — Suggest flood-free routes
+- **Community Chat** — Real-time communication between users in same zone
+- **Drone Integration** — Accept aerial flood imagery from drones
           LatLng(3.1500, 101.6900),
           LatLng(3.1550, 101.6950),
           LatLng(3.1450, 101.7000),
