@@ -59,8 +59,6 @@ Rather than relying on a single data source or central server, BILAHUJAN reframe
 
 ### 👥 Meet the Team
 
-BILAHUJAN is built by a four-person multidisciplinary team from Universiti Sains Malaysia, each contributing a distinct domain of expertise.
-
 | Name | Role |
 |:---|:---|
 | **Howard Woon Hao Zhe** | Lead Software Engineer & AI Integrator — full technical build, Gemini multi-pass pipeline, MCP tool registry, Command Agent, Firebase architecture, Google Maps integration |
@@ -73,8 +71,6 @@ BILAHUJAN is built by a four-person multidisciplinary team from Universiti Sains
 ## 2) Project Overview
 
 ### 🔴 Problem Statement
-
-The ASEAN region — including Malaysia — faces a recurring intelligence blackout during disasters. Like the typhoon and earthquake scenario described in Case Study 3, Malaysian floods create a critical window in which centralised systems fail:
 
 | Statistic | Figure |
 |:---|:---|
@@ -124,113 +120,37 @@ Edge operation (offline-ready)  →     Firebase RTDB + hardcoded 16-state fallb
 
 ---
 
-## 3) Live Platform Screenshots
-
-> All screenshots taken from the live deployment at [bilahujan-vhack.web.app](https://bilahujan-vhack.web.app)
-
-### 🗺️ Map Screen & Flood Zone Monitoring
-
-| | |
-|:---:|:---:|
-| ![Map Screen](docs/screenshots/map-screen.png) | ![Scan Near Me](docs/screenshots/scan-near-me.png) |
-| *Real-time 37-zone dual-layer map* | *Scan Near Me bottom sheet* |
-
-### 📷 AI Flood Analysis Pipeline
-
-| | |
-|:---:|:---:|
-| ![Camera Analysis](docs/screenshots/camera-analysis.png) | ![Result Critical](docs/screenshots/result-critical.png) |
-| *12-pass Gemini 2.5 Flash analysis* | *CRITICAL Level 10/10 assessment* |
-
-| | |
-|:---:|:---:|
-| ![Result Severe](docs/screenshots/result-severe.png) | ![Upload Success](docs/screenshots/upload-success.png) |
-| *SEVERE Level 7/10 with evacuation directive* | *Alert zone updated + navigate to Alert Menu* |
-
-### 🚨 Alert Menu — Real-Time State Monitoring
-
-| | |
-|:---:|:---:|
-| ![Malaysia Status](docs/screenshots/alerts-malaysia-status.png) | ![State Detail](docs/screenshots/alerts-state-detail.png) |
-| *All 16 states with real-time severity badges* | *Active flood zones vs monitored locations* |
-
-| | |
-|:---:|:---:|
-| ![Zone Analysis](docs/screenshots/zone-analysis.png) | ![Evacuation Centres](docs/screenshots/evacuation-centres.png) |
-| *Zone Analysis with Gemini AI Analysis* | *Real-time evacuation centre discovery* |
-
-### 📋 Report Flood — 5-Step Submission
-
-| | |
-|:---:|:---:|
-| ![Report Screen](docs/screenshots/report-screen.png) | ![Report Map](docs/screenshots/report-map-search.png) |
-| *5-step structured flood report* | *Search any Malaysian location* |
-
-### 🏛️ Government Intelligence Dashboard
-
-| | |
-|:---:|:---:|
-| ![GOV Dashboard](docs/screenshots/gov-dashboard.png) | ![GOV Analytics](docs/screenshots/gov-analytics.png) |
-| *Real-time statistics — incidents, severity, drainage* | *Location Analytics — Town, State ranking* |
-
-| | |
-|:---:|:---:|
-| ![Command Agent](docs/screenshots/command-agent-terminal.png) | ![MCP Tools](docs/screenshots/mcp-tool-feed.png) |
-| *Autonomous Command Agent live terminal* | *MCP tool activity feed* |
-
----
-
-## 4) Tech Stack Proof — Firebase Live Data
+## 3) Tech Stack Proof — Firebase Live Data
 
 > The following screenshots prove real Firebase Realtime Database usage — not mocked data.
 
 ### Firebase Console — Realtime Database (liveZones)
-<!-- Replace with your actual Firebase console screenshot -->
 ![Firebase RTDB](docs/firebase/firebase-rtdb-live.png)
 *Live liveZones/ with real citizen-uploaded severity scores*
 
 ### Firebase Console — liveReports
-<!-- Replace with your actual Firebase console screenshot -->
 ![Firebase Reports](docs/firebase/firebase-reports.png)
 *Real citizen flood reports with reportId, state, locationName, severity*
 
 ### Firebase Console — missionLogs
-<!-- Replace with your actual Firebase console screenshot -->
 ![Firebase Missions](docs/firebase/firebase-missionlogs.png)
 *Autonomous agent mission logs with chain-of-thought steps*
 
 ### Firebase Console — agentAlerts
-<!-- Replace with your actual Firebase console screenshot -->
 ![Firebase Alerts](docs/firebase/firebase-agentalerts.png)
 *Authority alerts dispatched by Command Agent to JPS/NADMA/APM*
 
 ### Firebase Console — systemHeartbeat
-<!-- Replace with your actual Firebase console screenshot -->
 ![Firebase Heartbeat](docs/firebase/firebase-heartbeat.png)
 *24/7 system health monitoring — 60-second intervals*
 
 ### Firebase Hosting — Live Deployment
-<!-- Replace with your actual Firebase hosting screenshot -->
 ![Firebase Hosting](docs/firebase/firebase-hosting.png)
 *bilahujan-vhack.web.app — active deployment on Firebase Spark plan*
 
 ---
 
-## 5) Tech Stack Proof — Google APIs Active Usage
-
-### Gemini API — Live Calls in Google AI Studio
-<!-- Replace with your actual API usage screenshot -->
-![Gemini API Usage](docs/api-proof/gemini-api-usage.png)
-*Active Gemini 2.5 Flash + 2.0 Flash API calls — real usage quota*
-
-### Google Maps Platform — APIs Enabled
-<!-- Replace with your actual Google Cloud Console screenshot -->
-![Maps APIs](docs/api-proof/google-maps-apis-enabled.png)
-*Maps JavaScript API · Places API · Geocoding API — all enabled and active*
-
----
-
-## 6) Key Features
+## 4) Key Features
 
 ### `01` Autonomous Command Agent *(Agentic AI)*
 
@@ -313,7 +233,7 @@ Every citizen image passes through **12 sequential AI passes** using `gemini-2.5
 
 ### `05` Severity Scoring — Physical Anchor Model & Single Source of Truth
 
-All severity label functions are defined **once** in `src/utils/floodCalculations.ts` and imported by every screen — zero local overrides allowed. This ensures 100% consistency across ResultScreen, ZoneDetailScreen, AlertsScreen, and GOV Dashboard.
+All severity label functions are defined **once** in `src/utils/floodCalculations.ts` and imported by every screen — zero local overrides allowed.
 
 | Score | Level | Physical Anchor | Hard Floor Rule |
 |:---:|:---|:---|:---|
@@ -341,7 +261,7 @@ Critical override   → applyCriticalVisualOverride() — always beats scene cap
 
 ### `06` Real-Time Location Intelligence — All 16 States + 3 Federal Territories
 
-BILAHUJAN implements a **3-priority location normalization pipeline** ensuring every flood report stores a clean `"Town, State"` formatted location name — consistent across all screens and Firebase records.
+BILAHUJAN implements a **3-priority location normalization pipeline** ensuring every flood report stores a clean `"Town, State"` formatted location name.
 
 ```
 Priority 1: Google Geocoding address_components (locality + admin_level_1)
@@ -398,23 +318,14 @@ AlertsScreen (16 state cards, real-time severity from isRealZone() filter)
 1. **Hero banner** — severity color + risk label (`severityToRiskLabel()`) + AI peak prediction
 2. **Time row** — START / END formatted as DD/MM/YYYY h:mm:ss am/pm
 3. **Stats row** — Drainage % · Rainfall mm/hr · AI Confidence % (all formula-derived)
-4. **Gemini AI Analysis** — full-width Google Maps Static thumbnail + visual analysis + historical context from `historicalFloodData.ts`
+4. **Gemini AI Analysis** — full-width Google Maps Static thumbnail + visual analysis + historical context
 5. **AI Recommendation** — nearest evacuation centres (Places API, 10km radius, Haversine sorted)
-
-**Badge labels — consistent across all screens:**
-```
-Level 1–2  → CLEAR     (green)
-Level 3–4  → CAUTION   (yellow)
-Level 4–5  → FLOOD     (orange)
-Level 6–7  → SEVERE    (dark orange)
-Level 8–10 → CRITICAL  (red, animate-pulse)
-```
 
 ---
 
 ### `09` Evacuation Centre Discovery — Select Then Go
 
-Users **tap to select** an evacuation centre first, then tap **Go →** to open Google Maps directions — no accidental navigation on tap.
+Users **tap to select** an evacuation centre first, then tap **Go →** to open Google Maps directions.
 
 **Multi-tier search fallback (no empty results ever):**
 ```
@@ -452,41 +363,41 @@ The Alert Menu uses **Gemini 2.0 Flash + Google Search grounding** to pull real-
 
 ---
 
-## 7) System Architecture
+## 5) System Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
 │                      BILAHUJAN Swarm Architecture                       │
 │                                                                         │
-│  ┌──────────────────────────────────────────────────────────────────┐   │
-│  │            Autonomous Command Agent (Gemini 2.0 Flash)           │   │
-│  │  Phase 1: Mission Planning (Chain-of-Thought)                    │   │
-│  │  Phase 2: MCP Tool Execution (7 tools · 800ms inter-step)        │   │
-│  │  Phase 3: Mission Summary + Firebase Persistence                 │   │
-│  └──────────────────┬───────────────────────────────────────────────┘   │
-│                     │  Model Context Protocol (MCP)                     │
-│      ┌──────────────┼──────────────────────┐                            │
-│      │              │                      │                            │
-│  scan_flood_zone  get_zone_status   update_zone_severity                │
-│  get_active_nodes dispatch_alert    get_system_health                   │
-│                   thermal_scan                                          │
+│  ┌──────────────────────────────────────────────────────────────────┐  │
+│  │            Autonomous Command Agent (Gemini 2.0 Flash)           │  │
+│  │  Phase 1: Mission Planning (Chain-of-Thought)                    │  │
+│  │  Phase 2: MCP Tool Execution (7 tools · 800ms inter-step)        │  │
+│  │  Phase 3: Mission Summary + Firebase Persistence                 │  │
+│  └──────────────────┬───────────────────────────────────────────────┘  │
+│                     │  Model Context Protocol (MCP)                    │
+│      ┌──────────────┼──────────────────────┐                           │
+│      │              │                      │                           │
+│  scan_flood_zone  get_zone_status   update_zone_severity               │
+│  get_active_nodes dispatch_alert    get_system_health                  │
+│                   thermal_scan (Haversine geo)                         │
 │                                                                         │
-│  ┌──────────────────────────────────────────────────────────────────┐   │
-│  │            Decentralised Citizen Swarm Network                   │   │
-│  │   NODE-001 ◉  NODE-002 ◉  NODE-003 ◎  NODE-004 ○  NODE-N ◉     │   │
-│  │   (Every flood report = an active intelligence node)             │   │
-│  └──────────────────────────────────────────────────────────────────┘   │
+│  ┌──────────────────────────────────────────────────────────────────┐  │
+│  │            Decentralised Citizen Swarm Network                   │  │
+│  │   NODE-001 ◉  NODE-002 ◉  NODE-003 ◎  NODE-004 ○  NODE-N ◉     │  │
+│  │   (Every flood report = an active intelligence node)             │  │
+│  └──────────────────────────────────────────────────────────────────┘  │
 │                                                                         │
-│  ┌─────────────────┐  ┌──────────────────────┐  ┌──────────────────┐    │
-│  │  Firebase RTDB  │  │  Gemini 2.5 Flash    │  │ Google Maps API  │    │
-│  │  (live state)   │  │  (12-pass pipeline)  │  │  (37 zones)      │    │
-│  └─────────────────┘  └──────────────────────┘  └──────────────────┘    │
+│  ┌─────────────────┐  ┌──────────────────────┐  ┌──────────────────┐  │
+│  │  Firebase RTDB  │  │  Gemini 2.5 Flash    │  │ Google Maps API  │  │
+│  │  (live state)   │  │  (12-pass pipeline)  │  │  (37 zones)      │  │
+│  └─────────────────┘  └──────────────────────┘  └──────────────────┘  │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## 8) Full Data Pipeline — Citizen to Authority
+## 6) Full Data Pipeline — Citizen to Authority
 
 | Step | What Happens |
 |:---:|:---|
@@ -505,7 +416,7 @@ The Alert Menu uses **Gemini 2.0 Flash + Google Search grounding** to pull real-
 
 ---
 
-## 9) Challenges Faced & Resolved
+## 7) Challenges Faced & Resolved
 
 | Challenge | Root Cause | Solution |
 |:---|:---|:---|
@@ -513,7 +424,7 @@ The Alert Menu uses **Gemini 2.0 Flash + Google Search grounding** to pull real-
 | ZoneDetailScreen showing wrong label (MODERATE for Level 7) | Local severity→label mapping contradicted Gemini result | Single source of truth in `floodCalculations.ts` — all screens import from there |
 | All states showing CRITICAL from seed data | Baseline zones had severity 9 from old seeding | `resetBaselineSeverities()` resets all baseline zones to severity 1 |
 | Location showing state name only (e.g. "Selangor") | `normalizeToTownState()` not receiving geocode components | Enhanced with `MALAYSIA_TOWNS` dictionary scan + `getMainTown()` capital fallback |
-| `"Kuala Lumpur, Kuala Lumpur"` duplicate | KL locality === KL state in Google Geocoding | `resolveKLDistrict()` + `KL_DISTRICT_MAP` — scans for actual district (Chow Kit, Bangsar etc.) |
+| `"Kuala Lumpur, Kuala Lumpur"` duplicate | KL locality === KL state in Google Geocoding | `resolveKLDistrict()` + `KL_DISTRICT_MAP` — scans for actual district |
 | Putrajaya / Labuan same duplicate issue | Same Federal Territory locality = state name | `PUTRAJAYA_PRECINCT_MAP` + `LABUAN_DISTRICT_MAP` + `FEDERAL_TERRITORIES` Set |
 | Building names in location (e.g. Kolej Kediaman) | GPS too precise → returns POI name | `isBuildingName()` filter skips institution names when extracting town from geocode |
 | Searched location ignored — GPS used in ResultScreen | ReportScreen/CameraScreen re-geocoding from device GPS | `SelectedLocation` object passed through full MapScreen → Camera → Result → Firebase chain |
@@ -533,7 +444,7 @@ The Alert Menu uses **Gemini 2.0 Flash + Google Search grounding** to pull real-
 
 ---
 
-## 10) AI Implementation Details
+## 8) AI Implementation Details
 
 ### 🤖 Two Models, Four Modalities
 
@@ -580,7 +491,7 @@ Secondary: gemini-2.5-flash SDK (35s withTimeout)
 
 ---
 
-## 11) Overview of Technologies Used
+## 9) Overview of Technologies Used
 
 ### 🟦 Google Technologies
 
@@ -643,7 +554,7 @@ BILAHUJAN Agentic Stack:
 
 ---
 
-## 12) Firebase Database Structure
+## 10) Firebase Database Structure
 
 ```
 Firebase Realtime Database:
@@ -674,7 +585,7 @@ Firestore Collections:
 
 ---
 
-## 13) Validated Test Cases
+## 11) Validated Test Cases
 
 > Every test case below is verifiable on the live platform at [bilahujan-vhack.web.app](https://bilahujan-vhack.web.app)
 
@@ -697,7 +608,7 @@ Firestore Collections:
 
 ---
 
-## 14) Installation & Setup
+## 12) Installation & Setup
 
 **Prerequisites:** Node.js v18+ · Firebase CLI (`npm install -g firebase-tools`)
 
@@ -742,7 +653,7 @@ firebase use kitahack   # → bilahujan-app.web.app    ← DO NOT DEPLOY HERE
 
 ---
 
-## 15) Full Feature Delivery Checklist
+## 13) Full Feature Delivery Checklist
 
 > Every item below is **live and testable** at [bilahujan-vhack.web.app](https://bilahujan-vhack.web.app)
 
@@ -792,7 +703,7 @@ firebase use kitahack   # → bilahujan-app.web.app    ← DO NOT DEPLOY HERE
 
 ---
 
-## 16) Future Roadmap
+## 14) Future Roadmap
 
 | Phase | Feature | Technology | Impact |
 |:---:|:---|:---|:---|
@@ -807,7 +718,7 @@ firebase use kitahack   # → bilahujan-app.web.app    ← DO NOT DEPLOY HERE
 
 ---
 
-## 17) Judging Criteria Coverage
+## 15) Judging Criteria Coverage
 
 ### Technical — 50%
 
@@ -830,7 +741,7 @@ firebase use kitahack   # → bilahujan-app.web.app    ← DO NOT DEPLOY HERE
 
 ---
 
-## 18) Commercial Viability
+## 16) Commercial Viability
 
 | Buyer | What They Receive | Why It Has Value |
 |:---|:---|:---|
@@ -849,7 +760,7 @@ Every citizen report simultaneously:
 
 ---
 
-## 19) Acknowledgements
+## 17) Acknowledgements
 
 - **V Hack 2026 & Universiti Sains Malaysia** — for the platform and the opportunity
 - **Google** — for Gemini, Firebase, Google Maps Platform, and the @google/genai SDK
