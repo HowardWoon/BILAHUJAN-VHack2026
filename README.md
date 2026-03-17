@@ -111,42 +111,42 @@ Edge operation (offline-ready)  →     Firebase RTDB + hardcoded 16-state fallb
 
 ### Firebase Console — Realtime Database (liveZones)
 
-![Firebase RTDB](https://github.com/user-attachments/assets/d1aa360f-5153-4e07-9fe5-a03b90afe173)
+![Firebase Reports](https://github.com/user-attachments/assets/87982019-094f-4de3-b488-234f202271cf)
 *Live liveZones/ with real citizen-uploaded severity scores*
 
 ---
 
 ### Firebase Console — liveReports
 
-![Firebase Reports](https://github.com/user-attachments/assets/87982019-094f-4de3-b488-234f202271cf)
+![Firebase Alerts](https://github.com/user-attachments/assets/cb650e6d-8ff9-442d-9cf2-3d57ea253628)
 *Real citizen flood reports with reportId, state, locationName, severity*
 
 ---
 
 ### Firebase Console — missionLogs
 
-![Firebase Missions](https://github.com/user-attachments/assets/db541c37-f59c-4879-80fa-172460acc231)
+![Firebase Heartbeat](https://github.com/user-attachments/assets/3e54f96e-829f-4a5d-9253-a0e93f819667)
 *Autonomous agent mission logs with chain-of-thought steps*
 
 ---
 
 ### Firebase Console — agentAlerts
 
-![Firebase Alerts](https://github.com/user-attachments/assets/cb650e6d-8ff9-442d-9cf2-3d57ea253628)
+![Firebase Missions](https://github.com/user-attachments/assets/db541c37-f59c-4879-80fa-172460acc231)
 *Authority alerts dispatched by Command Agent to JPS/NADMA/APM*
 
 ---
 
 ### Firebase Console — systemHeartbeat
 
-![Firebase Heartbeat](https://github.com/user-attachments/assets/3e54f96e-829f-4a5d-9253-a0e93f819667)
+![Firebase Hosting](https://github.com/user-attachments/assets/3d0130c4-f47f-42aa-a1e3-e2aded1eae77)
 *24/7 system health monitoring — 60-second intervals*
 
 ---
 
 ### Firebase Hosting — Live Deployment
 
-![Firebase Hosting](https://github.com/user-attachments/assets/3d0130c4-f47f-42aa-a1e3-e2aded1eae77)
+![Firebase RTDB](https://github.com/user-attachments/assets/d1aa360f-5153-4e07-9fe5-a03b90afe173)
 *bilahujan-vhack.web.app — active deployment on Firebase Spark plan*
 
 ---
@@ -157,29 +157,29 @@ Edge operation (offline-ready)  →     Firebase RTDB + hardcoded 16-state fallb
 ┌─────────────────────────────────────────────────────────────────────────┐
 │                      BILAHUJAN Swarm Architecture                       │
 │                                                                         │
-│  ┌──────────────────────────────────────────────────────────────────┐  │
-│  │            Autonomous Command Agent (Gemini 2.0 Flash)           │  │
-│  │  Phase 1: Mission Planning (Chain-of-Thought)                    │  │
-│  │  Phase 2: MCP Tool Execution (7 tools · 800ms inter-step)        │  │
-│  │  Phase 3: Mission Summary + Firebase Persistence                 │  │
-│  └──────────────────┬───────────────────────────────────────────────┘  │
-│                     │  Model Context Protocol (MCP)                    │
-│      ┌──────────────┼──────────────────────┐                           │
-│      │              │                      │                           │
-│  scan_flood_zone  get_zone_status   update_zone_severity               │
-│  get_active_nodes dispatch_alert    get_system_health                  │
-│                   thermal_scan (Haversine geo)                         │
+│  ┌──────────────────────────────────────────────────────────────────┐   │
+│  │            Autonomous Command Agent (Gemini 2.0 Flash)           │   │
+│  │  Phase 1: Mission Planning (Chain-of-Thought)                    │   │
+│  │  Phase 2: MCP Tool Execution (7 tools · 800ms inter-step)        │   │
+│  │  Phase 3: Mission Summary + Firebase Persistence                 │   │
+│  └──────────────────┬───────────────────────────────────────────────┘   │
+│                     │  Model Context Protocol (MCP)                     │
+│      ┌──────────────┼──────────────────────┐                            │
+│      │              │                      │                            │
+│  scan_flood_zone  get_zone_status   update_zone_severity                │
+│  get_active_nodes dispatch_alert    get_system_health                   │
+│                   thermal_scan (Haversine geo)                          │
 │                                                                         │
-│  ┌──────────────────────────────────────────────────────────────────┐  │
-│  │            Decentralised Citizen Swarm Network                   │  │
-│  │   NODE-001 ◉  NODE-002 ◉  NODE-003 ◎  NODE-004 ○  NODE-N ◉     │  │
-│  │   (Every flood report = an active intelligence node)             │  │
-│  └──────────────────────────────────────────────────────────────────┘  │
+│  ┌──────────────────────────────────────────────────────────────────┐   │
+│  │            Decentralised Citizen Swarm Network                   │   │
+│  │   NODE-001 ◉  NODE-002 ◉  NODE-003 ◎  NODE-004 ○  NODE-N ◉     │   │
+│  │   (Every flood report = an active intelligence node)             │   │
+│  └──────────────────────────────────────────────────────────────────┘   │
 │                                                                         │
-│  ┌─────────────────┐  ┌──────────────────────┐  ┌──────────────────┐  │
-│  │  Firebase RTDB  │  │  Gemini 2.5 Flash    │  │ Google Maps API  │  │
-│  │  (live state)   │  │  (12-pass pipeline)  │  │  (37 zones)      │  │
-│  └─────────────────┘  └──────────────────────┘  └──────────────────┘  │
+│  ┌─────────────────┐  ┌──────────────────────┐  ┌──────────────────┐    │
+│  │  Firebase RTDB  │  │  Gemini 2.5 Flash    │  │ Google Maps API  │    │
+│  │  (live state)   │  │  (12-pass pipeline)  │  │  (37 zones)      │    │
+│  └─────────────────┘  └──────────────────────┘  └──────────────────┘    │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
 
