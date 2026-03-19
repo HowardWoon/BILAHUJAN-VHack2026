@@ -18,6 +18,7 @@ import {
   severityToRiskLabel,
   severityToWaterDepth,
   deduplicateFTName,
+  isZoneExpired,
   trimToCity
 } from '../utils/floodCalculations';
 
@@ -327,13 +328,16 @@ export default function ZoneDetailScreen({ zone, onBack, onTabChange }: ZoneDeta
   }
 
   const severity = Math.max(1, Math.min(10, Number(activeZone.severity || 1)));
+  const expiredZone = isZoneExpired(activeZone);
+  const effectiveSeverity = expiredZone ? 1 : severity;
   const locationRaw = (activeZone.locationName || activeZone.specificLocation || activeZone.name || activeZone.state || 'Unknown').trim();
   const trimmedLocation = trimToCity(locationRaw);
   const locationName = deduplicateFTName(trimmedLocation === 'Unknown Location' ? (activeZone.state || 'Unknown') : trimmedLocation);
   const hasRealFloodIncident =
-    severity >= 2 &&
+    effectiveSeverity >= 2 &&
     (activeZone as any).reportId != null &&
-    !(activeZone as any).isWeatherFallbackZone;
+    !(activeZone as any).isWeatherFallbackZone &&
+    !expiredZone;
   const isBaselineMonitoring = !hasRealFloodIncident;
   const historicalRisk = calcHistoricalRiskScore(activeZone.state || '', locationRaw);
   const historicalMatch = historicalRisk >= 2;
@@ -343,8 +347,8 @@ export default function ZoneDetailScreen({ zone, onBack, onTabChange }: ZoneDeta
   const computedConfidence = deriveAIConfidence(geminiConfidenceZeroToOne * 100, reportsAgreeingWithin1, zoneReports.length, historicalMatch, severity);
 
   const activeMetrics: ZoneMetrics = {
-    drainage: Math.round(Number((activeZone as any).blockagePercent ?? (activeZone as any).drainageBlockage ?? severityToBlockage(severity))),
-    rainfall: Math.round(Number(analysisData?.rainfallMmHr ?? analysisData?.rainfall ?? (activeZone as any).rainfall ?? severityToRainfall(severity))),
+    drainage: Math.round(Number((activeZone as any).blockagePercent ?? (activeZone as any).drainageBlockage ?? severityToBlockage(effectiveSeverity))),
+    rainfall: Math.round(Number(analysisData?.rainfallMmHr ?? analysisData?.rainfall ?? (activeZone as any).rainfall ?? severityToRainfall(effectiveSeverity))),
     confidence: computedConfidence
   };
 
@@ -369,7 +373,9 @@ export default function ZoneDetailScreen({ zone, onBack, onTabChange }: ZoneDeta
   const startText = isBaselineMonitoring
     ? 'No event recorded'
     : (startRaw ? formatDateTime(startRaw, 'Already in progress') : 'Already in progress');
-  const endText = isBaselineMonitoring
+  const endText = expiredZone
+    ? formatDateTime(endRaw, 'Unknown')
+    : isBaselineMonitoring
     ? 'No event recorded'
     : formatDateTime(endRaw, 'Unknown');
   const historicalText = isBaselineMonitoring
@@ -377,7 +383,7 @@ export default function ZoneDetailScreen({ zone, onBack, onTabChange }: ZoneDeta
     : getHistoricalContext(activeZone.state || '');
   const visualText = isBaselineMonitoring
     ? 'No flood indicators detected in this area.'
-    : getVisualAnalysis(activeZone, severity);
+    : getVisualAnalysis(activeZone, effectiveSeverity);
   const activeCenter = selectedCenter || evacCenters[0] || null;
 
   return (
@@ -393,16 +399,16 @@ export default function ZoneDetailScreen({ zone, onBack, onTabChange }: ZoneDeta
       </header>
 
       <main className="flex-1 overflow-y-auto px-6 pb-24 space-y-4">
-        <div className={`${isBaselineMonitoring ? 'bg-[#064e3b]' : `bg-gradient-to-r ${severityToHeroBg(severity)}`} text-white p-6 rounded-3xl shadow-lg`}>
+        <div className={`${isBaselineMonitoring ? 'bg-[#064e3b]' : `bg-gradient-to-r ${severityToHeroBg(effectiveSeverity)}`} text-white p-6 rounded-3xl shadow-lg`}>
           <div className="flex items-center gap-2 mb-2">
             <span className="material-icons-round text-white/90 text-sm">{isBaselineMonitoring ? 'check_circle' : 'warning'}</span>
             <span className={`inline-block px-2 py-0.5 text-[10px] font-bold uppercase tracking-widest rounded-full ${isBaselineMonitoring ? 'bg-green-400 text-[#064e3b]' : 'bg-white/20 text-white'}`}>
-              {isBaselineMonitoring ? 'ALL CLEAR' : severityToRiskLabel(severity)}
+              {isBaselineMonitoring ? 'ALL CLEAR' : severityToRiskLabel(effectiveSeverity)}
             </span>
           </div>
           <h2 className="text-[32px] leading-[1.05] font-extrabold mb-2 tracking-tight">{locationName}</h2>
           <div className="flex items-center gap-2 text-white/90 text-sm font-medium">
-            <p>{isBaselineMonitoring ? '🛰 No flood activity detected. Monitoring active.' : `AI predicts flood peak in ${severityToPeakPrediction(severity)}`}</p>
+            <p>{expiredZone ? '🛰 Flood event ended. Area has returned to normal.' : isBaselineMonitoring ? '🛰 No flood activity detected. Monitoring active.' : `AI predicts flood peak in ${severityToPeakPrediction(effectiveSeverity)}`}</p>
           </div>
         </div>
 
@@ -428,7 +434,7 @@ export default function ZoneDetailScreen({ zone, onBack, onTabChange }: ZoneDeta
             <div>
               <div className="text-2xl font-bold mb-1">{metrics.drainage}%</div>
               <p className={`text-xs font-medium ${isBaselineMonitoring ? 'text-green-400' : isDrainageBlocked(severity) ? 'text-red-400' : 'text-green-400'}`}>
-                {isDrainageBlocked(severity) ? 'Blocked' : 'Clear'}
+                {isDrainageBlocked(effectiveSeverity) ? 'Blocked' : 'Clear'}
               </p>
             </div>
             <div className="w-full h-1.5 bg-slate-700 rounded-full mt-3 overflow-hidden">

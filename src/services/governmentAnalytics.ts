@@ -3,6 +3,7 @@ import {
   calcAvgResponseTime,
   calcDrainageEfficiency,
   isRealZone,
+  isZoneExpired,
   mean,
   normalizeStateName,
   normalizeToTownState,
@@ -320,19 +321,26 @@ export const getFloodStatistics = async (
     const zones = zonesSnap.exists() ? (Object.values(zonesSnap.val()) as any[]) : [];
     const agentAlerts = alertsSnap.exists() ? (Object.values(alertsSnap.val()) as AgentAlertLike[]) : [];
 
-    const startMs = startDate.getTime();
-    const endMs = endDate.getTime();
+    const allZones = zones;
+    const incidentZones = allZones.filter((zone: any) => {
+      const source = String(zone?.source || '').toLowerCase();
+      const hasUserEvidence =
+        zone?.reportId != null ||
+        zone?.uploadedAt != null ||
+        source === 'user' ||
+        source === 'citizen_scan';
 
-    const filteredZones = zones.filter((zone: any) => {
-      const timestamp = toTimestampMs(zone?.timestamp);
-      return timestamp >= startMs && timestamp <= endMs;
+      return (
+        hasUserEvidence &&
+        source !== 'baseline' &&
+        source !== 'seed' &&
+        source !== 'hardcoded'
+      );
     });
 
-    const activeZones = filteredZones.length > 0 ? filteredZones : zones;
-    const allZones = activeZones;
-    const realZones = allZones.filter(isRealZone);
+    const realZones = incidentZones.filter((zone: any) => isRealZone(zone) && !isZoneExpired(zone));
 
-    if (realZones.length === 0) {
+    if (incidentZones.length === 0) {
       return {
         totalIncidents: 0,
         averageSeverity: 0,
@@ -344,15 +352,15 @@ export const getFloodStatistics = async (
       };
     }
 
-    const totalIncidents = realZones.length;
-    const avgSeverity = mean(realZones.map((zone: any) => Number(zone?.severity || 0)));
-    const uniqueAreas = new Set(realZones.map((zone: any) => zone?.state).filter(Boolean));
+    const totalIncidents = incidentZones.length;
+    const avgSeverity = mean(incidentZones.map((zone: any) => Number(zone?.severity || 0)));
+    const uniqueAreas = new Set(incidentZones.map((zone: any) => zone?.state).filter(Boolean));
 
-    const severeRatio = realZones.filter((zone: any) => Number(zone?.severity || 0) >= 4).length / Math.max(allZones.length, 1);
+    const severeRatio = realZones.filter((zone: any) => Number(zone?.severity || 0) >= 4).length / Math.max(incidentZones.length, 1);
     const avgBlockage = realZones.reduce((sum: number, zone: any) => {
       return sum + severityToBlockage(Number(zone?.severity || 0));
-    }, 0) / totalIncidents;
-    const drainageEfficiency = totalIncidents === 0
+    }, 0) / Math.max(realZones.length, 1);
+    const drainageEfficiency = realZones.length === 0
       ? 100
       : Math.max(0, Math.min(100, Math.round(100 - (avgBlockage * severeRatio))));
 
@@ -404,7 +412,7 @@ export const getFloodStatistics = async (
       ? locationRows[0].location
       : 'Unknown';
 
-    const avgResponseTime = calcAvgResponseTime(realZones, agentAlerts);
+    const avgResponseTime = calcAvgResponseTime(incidentZones, agentAlerts);
 
     return {
       totalIncidents,
@@ -437,7 +445,7 @@ export const getLocationAnalytics = async (): Promise<LocationAnalytics[]> => {
     }
 
     const allZones = Object.values(zonesSnap.val()) as any[];
-    const zones = allZones.filter(isRealZone);
+    const zones = allZones.filter((zone: any) => isRealZone(zone) && !isZoneExpired(zone));
 
     const locationMap: Record<
       string,
@@ -596,7 +604,7 @@ export const getInfrastructureInsights = async (): Promise<InfrastructureInsight
 
     const zones = (Object.values(zonesSnap.val()) as any[])
       .filter(isRealtimeZone)
-      .filter(isRealZone);
+      .filter((zone: any) => isRealZone(zone) && !isZoneExpired(zone));
     const agentAlerts = alertsSnap.exists() ? (Object.values(alertsSnap.val()) as AgentAlertLike[]) : [];
 
     const criticalEntries = dedupeAndSortZoneEntries(

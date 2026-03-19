@@ -26,6 +26,20 @@ export const isRealZone = (zone: ZoneLike | any): boolean => {
   );
 };
 
+export const isZoneExpired = (zone: any): boolean => {
+  if (zone?.isExpired === true) return true;
+
+  const expirySource = zone?.endTime ?? zone?.estimatedEndTime;
+  if (!expirySource) return false;
+
+  if (Number(zone?.severity || 0) <= 1) return false;
+
+  const endTimeMs = toTimestampMs(expirySource);
+  if (!endTimeMs) return false;
+
+  return Date.now() >= endTimeMs;
+};
+
 export interface ReportLike {
   zoneId?: string;
   severity?: number;
@@ -294,6 +308,28 @@ export const toTimestampMs = (value: unknown): number => {
       const numeric = Number(trimmed);
       return numeric < 1_000_000_000_000 ? numeric * 1000 : numeric;
     }
+
+    const ddmmyyyyMatch = trimmed.match(
+      /^(\d{1,2})\/(\d{1,2})\/(\d{4})(?:,)?\s+(\d{1,2}):(\d{2})(?::(\d{2}))?\s*([ap]m)$/i
+    );
+    if (ddmmyyyyMatch) {
+      const [, dayRaw, monthRaw, yearRaw, hourRaw, minuteRaw, secondRaw, meridiemRaw] = ddmmyyyyMatch;
+      const day = Number(dayRaw);
+      const month = Number(monthRaw);
+      const year = Number(yearRaw);
+      const minute = Number(minuteRaw);
+      const second = Number(secondRaw || '0');
+      const meridiem = meridiemRaw.toLowerCase();
+
+      let hour = Number(hourRaw) % 12;
+      if (meridiem === 'pm') {
+        hour += 12;
+      }
+
+      const parsed = new Date(year, month - 1, day, hour, minute, second).getTime();
+      if (Number.isFinite(parsed)) return parsed;
+    }
+
     const parsed = Date.parse(trimmed);
     return Number.isNaN(parsed) ? 0 : parsed;
   }

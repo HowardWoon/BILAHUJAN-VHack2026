@@ -6,7 +6,7 @@ import { rtdb } from '../firebase';
 import type { FloodZone } from '../data/floodZones';
 import { addFloodZone, createZone, reconcileStateSeverity, seedTownZonesInRealtimeDb } from '../data/floodZones';
 import { fetchLiveWeatherAndCCTV } from '../services/gemini';
-import { deduplicateFTName, isRealZone, severityToBadge, severityToCardClass, trimToCity } from '../utils/floodCalculations';
+import { deduplicateFTName, isRealZone, isZoneExpired, severityToBadge, severityToCardClass, trimToCity } from '../utils/floodCalculations';
 
 interface AlertsScreenProps {
   onTabChange: (tab: 'map' | 'report' | 'alert' | 'dashboard') => void;
@@ -165,7 +165,7 @@ export default function AlertsScreen({
   const stateCards = useMemo(() => {
     return MALAYSIA_STATES.map((state) => {
       const stateZones = getStateZones(state.name, zonesById);
-      const realZones = stateZones.filter((zone) => isRealZone(zone));
+      const realZones = stateZones.filter((zone) => isRealZone(zone) && !isZoneExpired(zone));
       const verifiedCount = realZones.length;
       const maxSeverity = verifiedCount > 0
         ? Math.max(...realZones.map((zone) => Number(zone.severity || 1)))

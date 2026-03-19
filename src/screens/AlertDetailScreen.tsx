@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useState } from 'react';
-import { ref, onValue, get } from 'firebase/database';
+import { ref, onValue, get, update } from 'firebase/database';
 import StatusBar from '../components/StatusBar';
 import BottomNav from '../components/BottomNav';
 import { rtdb } from '../firebase';
 import type { FloodZone } from '../data/floodZones';
-import { deduplicateFTName, isRealZone, severityToBadge, severityToBorderColor, trimToCity } from '../utils/floodCalculations';
+import { deduplicateFTName, isRealZone, isZoneExpired, severityToBadge, severityToBorderColor, toTimestampMs, trimToCity } from '../utils/floodCalculations';
 
 interface ZoneListItem extends FloodZone {
   uploaded: boolean;
@@ -64,6 +64,11 @@ const isMonitoringBaselineZone = (zone: FloodZone) =>
   (zone as any).source === 'baseline' ||
   (zone as any).source === 'seed';
 
+const getEffectiveSeverity = (zone: FloodZone): number => {
+  if (isZoneExpired(zone)) return 1;
+  return Math.max(1, Math.min(10, Number(zone.severity || 1)));
+};
+
 const formatStartTime = (zone: FloodZone): string => {
   if (isMonitoringBaselineZone(zone)) {
     return 'N/A';
@@ -90,13 +95,13 @@ const formatEndTime = (zone: FloodZone): string => {
   return formatDateTime(endTime, 'Ongoing');
 };
 
-const deriveTips = (zone: FloodZone): string[] => {
+const deriveTips = (zone: FloodZone, effectiveSeverity: number): string[] => {
   const fromTips = (zone as any).tips;
   if (Array.isArray(fromTips) && fromTips.length > 0) {
     return fromTips.slice(0, 3).map((tip) => `${tip}`.trim()).filter(Boolean);
   }
 
-  const severity = Math.max(1, Math.min(10, Number(zone.severity || 1)));
+  const severity = Math.max(1, Math.min(10, Number(effectiveSeverity || 1)));
   if (severity >= 8) {
     return [
       'Evacuate now and avoid all flooded routes.',
@@ -175,6 +180,49 @@ export default function AlertDetailScreen({ zoneId, stateName, onBack, onScanCli
     };
   }, [zoneId, stateName, refreshKey]);
 
+  useEffect(() => {
+    let mounted = true;
+
+    const checkExpiredZones = async () => {
+      try {
+        const snap = await get(ref(rtdb, 'liveZones'));
+        if (!mounted || !snap.exists()) return;
+
+        const now = Date.now();
+        const zones = Object.entries(snap.val() ?? {}) as [string, FloodZone][];
+
+        for (const [id, zone] of zones) {
+          const endTimeMs = toTimestampMs((zone as any)?.endTime ?? (zone as any)?.estimatedEndTime);
+          if (
+            endTimeMs > 0 &&
+            Number((zone as any)?.severity || 0) > 1 &&
+            (zone as any)?.isExpired !== true &&
+            now >= endTimeMs
+          ) {
+            await update(ref(rtdb, `liveZones/${id}`), {
+              severity: 1,
+              isExpired: true,
+              expiredAt: now
+            });
+            console.log(`[auto-expire] ${zone.locationName || zone.state || id} → NORMAL`);
+          }
+        }
+      } catch (error) {
+        console.error('checkExpiredZones error:', error);
+      }
+    };
+
+    void checkExpiredZones();
+    const interval = window.setInterval(() => {
+      void checkExpiredZones();
+    }, 60000);
+
+    return () => {
+      mounted = false;
+      window.clearInterval(interval);
+    };
+  }, []);
+
   const handleRefresh = () => {
     if (refreshing) return;
     setRefreshing(true);
@@ -204,20 +252,23 @@ export default function AlertDetailScreen({ zoneId, stateName, onBack, onScanCli
     });
 
     const realZones = stateZones.filter(isRealZone);
-    const highRisk = realZones.filter((zone) => Number(zone.severity || 1) >= 4);
-    const normal = realZones.filter((zone) => Number(zone.severity || 1) <= 3);
+    const activeRealZones = realZones.filter((zone) => !isZoneExpired(zone));
+    const expiredRealZones = realZones.filter((zone) => isZoneExpired(zone));
+    const highRisk = activeRealZones.filter((zone) => getEffectiveSeverity(zone) >= 4);
+    const normal = activeRealZones.filter((zone) => getEffectiveSeverity(zone) <= 3);
     const baseline = stateZones.filter(isBaselineZone);
 
-    return { highRisk, normal, baseline, allCount: stateZones.length };
+    return { highRisk, normal, baseline, expiredRealZones, allCount: stateZones.length };
   }, [zonesById, selectedState, uploadedZoneIds]);
 
   const renderZoneCard = (zone: ZoneListItem, muted = false) => {
-    const severity = muted ? 1 : Math.max(1, Math.min(10, Number(zone.severity || 1)));
-      const badge = severityToBadge(severity);
-    const zoneTips = deriveTips(zone);
+    const expired = isZoneExpired(zone);
+    const severity = muted || expired ? 1 : getEffectiveSeverity(zone);
+    const badge = severityToBadge(severity);
+    const zoneTips = deriveTips(zone, severity);
     const startTime = formatStartTime(zone);
     const endTime = formatEndTime(zone);
-    const isBaselineCard = isMonitoringBaselineZone(zone);
+    const isBaselineCard = muted || isMonitoringBaselineZone(zone) || expired;
     const hasUploadedSource = zone.source === 'user' || zone.reportId != null;
 
     return (
@@ -261,6 +312,10 @@ export default function AlertDetailScreen({ zoneId, stateName, onBack, onScanCli
           ))}
         </ul>
 
+        {expired && (
+          <p className="mt-3 text-xs text-green-300 font-medium">Flood event has ended. Area returning to normal.</p>
+        )}
+
         {!isBaselineCard ? (
           <div className="mt-3 grid grid-cols-2 gap-2 bg-slate-950 border border-slate-700 rounded-xl p-2.5">
             <div>
@@ -281,7 +336,7 @@ export default function AlertDetailScreen({ zoneId, stateName, onBack, onScanCli
           <span className="material-icons-round text-sm ml-1">arrow_forward</span>
         </button>
 
-        {muted && (
+        {muted && !expired && (
           <div className="mt-2 inline-flex items-center px-2 py-1 rounded-full bg-slate-700 text-slate-200 text-[10px] font-black tracking-wide">
             BASELINE DATA
           </div>
@@ -344,7 +399,7 @@ export default function AlertDetailScreen({ zoneId, stateName, onBack, onScanCli
               </section>
             )}
 
-            {grouped.baseline.length > 0 && (
+            {(grouped.expiredRealZones.length > 0 || grouped.baseline.length > 0) && (
               <section>
                 <div className="mb-2">
                   <div className="flex items-center gap-2">
@@ -359,6 +414,7 @@ export default function AlertDetailScreen({ zoneId, stateName, onBack, onScanCli
                   <p className="text-gray-500 text-xs mt-1">These areas are being monitored. No active flood detected.</p>
                 </div>
                 <div className="space-y-3">
+                  {grouped.expiredRealZones.map((zone) => renderZoneCard(zone))}
                   {grouped.baseline.map((zone) => renderZoneCard(zone, true))}
                 </div>
               </section>
