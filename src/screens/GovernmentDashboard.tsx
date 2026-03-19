@@ -370,6 +370,36 @@ export const GovernmentDashboard: FC<GovernmentDashboardProps> = ({ onTabChange,
     [locationAnalytics, onLocationAlertOpen]
   );
 
+  const mostAffectedRegion = useMemo(() => {
+    const topLocation = locationAnalytics.find((loc) => {
+      const candidate = String(loc?.location || '').trim().toLowerCase();
+      return candidate && candidate !== 'unknown' && candidate !== 'n/a' && candidate !== 'malaysia';
+    }) || locationAnalytics?.[0];
+
+    if (topLocation) {
+      const normalizedState = normalizeStateName(topLocation.state || '') || 'Unknown';
+      const cleanedLocation = String(topLocation.location || '')
+        .replace(/^live\s*weather\s*:?\s*/i, '')
+        .replace(/\s+/g, ' ')
+        .trim();
+
+      const lowered = cleanedLocation.toLowerCase();
+      const locationSource = !cleanedLocation || lowered === 'unknown' || lowered === 'n/a'
+        ? normalizedState
+        : cleanedLocation;
+
+      const townState = normalizeToTownState(locationSource || normalizedState);
+      const primaryLabel = deduplicateFTName(townState || `${normalizedState}, ${normalizedState}`);
+
+      if (primaryLabel && primaryLabel.toLowerCase() !== 'unknown') {
+        return primaryLabel;
+      }
+    }
+
+    const statsRegion = String(statistics?.mostAffectedRegion || '').trim();
+    return statsRegion || 'Unknown';
+  }, [locationAnalytics, statistics]);
+
   const handleManualRefresh = useCallback(() => {
     if (isManualRefreshing || manualRefreshLockRef.current) {
       return;
@@ -598,7 +628,7 @@ export const GovernmentDashboard: FC<GovernmentDashboardProps> = ({ onTabChange,
                 </div>
                 <h3 className="font-bold text-slate-800">Most Affected Region</h3>
               </div>
-              <p className="text-2xl font-bold text-slate-900">{statistics?.mostAffectedRegion || 'N/A'}</p>
+              <p className="text-2xl font-bold text-gray-800">{mostAffectedRegion}</p>
             </div>
           </section>
 

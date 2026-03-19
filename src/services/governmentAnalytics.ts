@@ -277,6 +277,38 @@ const getZoneSeverity = (zone: any): number => {
   return 0;
 };
 
+const isGenericLocationLabel = (value: string): boolean => {
+  const normalized = String(value || '').trim().toLowerCase();
+  if (!normalized) return true;
+  if (normalized === 'unknown' || normalized === 'n/a' || normalized === 'na') return true;
+  if (normalized === 'malaysia') return true;
+  if (/^malaysia\s*,/.test(normalized)) return true;
+  return false;
+};
+
+const getZoneAnalyticsLocation = (zone: any): { state: string; location: string } | null => {
+  const state = normalizeStateName((zone?.state || zone?.region || 'Unknown').toString().trim()) || 'Unknown';
+  const locationSource = (
+    zone?.locationName?.trim() ||
+    zone?.specificLocation?.trim() ||
+    zone?.name?.trim() ||
+    zone?.state ||
+    'Unknown'
+  );
+
+  let location = normalizeToTownState(String(locationSource), undefined).trim();
+
+  if (isGenericLocationLabel(location)) {
+    location = normalizeToTownState(state, undefined).trim() || state;
+  }
+
+  if (state.toLowerCase() === 'unknown' && isGenericLocationLabel(location)) {
+    return null;
+  }
+
+  return { state, location };
+};
+
 export const getFloodStatistics = async (
   startDate: Date,
   endDate: Date
@@ -305,7 +337,7 @@ export const getFloodStatistics = async (
         totalIncidents: 0,
         averageSeverity: 0,
         affectedAreas: 0,
-        mostAffectedRegion: 'N/A',
+        mostAffectedRegion: 'Unknown',
         drainageEfficiency: 100,
         avgResponseTime: 0,
         timeRange: { start: startDate, end: endDate }
@@ -324,14 +356,53 @@ export const getFloodStatistics = async (
       ? 100
       : Math.max(0, Math.min(100, Math.round(100 - (avgBlockage * severeRatio))));
 
-    const regionCounts: Record<string, number> = {};
+    const locationMap: Record<
+      string,
+      {
+        zones: any[];
+        state: string;
+        location: string;
+      }
+    > = {};
+
     realZones.forEach((zone: any) => {
-      const region = String(zone?.state || 'Unknown').trim() || 'Unknown';
-      regionCounts[region] = (regionCounts[region] || 0) + Number(zone?.severity || 0);
+      const analyticsLocation = getZoneAnalyticsLocation(zone);
+      if (!analyticsLocation) {
+        return;
+      }
+
+      const { state, location } = analyticsLocation;
+      const mapKey = `${state.toLowerCase()}::${location.toLowerCase()}`;
+
+      if (!locationMap[mapKey]) {
+        locationMap[mapKey] = {
+          zones: [],
+          state,
+          location
+        };
+      }
+
+      locationMap[mapKey].zones.push(zone);
     });
 
-    const mostAffectedRegion =
-      Object.entries(regionCounts).sort(([, left], [, right]) => right - left)[0]?.[0] || 'N/A';
+    const locationRows = Object.values(locationMap)
+      .map((data) => {
+        const count = data.zones.length;
+        const totalSeverity = data.zones.reduce((sum: number, zone: any) => {
+          const severity = typeof zone?.severity === 'number' ? zone.severity : 0;
+          return sum + severity;
+        }, 0);
+
+        return {
+          location: data.location,
+          avgSeverity: count > 0 ? Number((totalSeverity / count).toFixed(1)) : 0
+        };
+      })
+      .sort((left, right) => right.avgSeverity - left.avgSeverity);
+
+    const mostAffectedRegion = locationRows.length > 0
+      ? locationRows[0].location
+      : 'Unknown';
 
     const avgResponseTime = calcAvgResponseTime(realZones, agentAlerts);
 
@@ -380,16 +451,19 @@ export const getLocationAnalytics = async (): Promise<LocationAnalytics[]> => {
     > = {};
 
     zones.forEach((zone: any) => {
-      const state = normalizeStateName((zone?.state || zone?.region || 'Unknown').toString().trim()) || 'Unknown';
-      const key = zone?.locationName?.trim() || zone?.state || 'Unknown';
-      const rawLocationName = normalizeToTownState(String(key), undefined).trim() || state;
-      const mapKey = `${state.toLowerCase()}::${rawLocationName.toLowerCase()}`;
+      const analyticsLocation = getZoneAnalyticsLocation(zone);
+      if (!analyticsLocation) {
+        return;
+      }
+
+      const { state, location } = analyticsLocation;
+      const mapKey = `${state.toLowerCase()}::${location.toLowerCase()}`;
 
       if (!locationMap[mapKey]) {
         locationMap[mapKey] = {
           zones: [],
           state,
-          location: rawLocationName,
+          location,
           topZoneId: zone?.id,
           topSeverity: 0
         };
