@@ -318,7 +318,6 @@ Firestore Collections:
 ```bash
 git clone https://github.com/HowardWoon/BILAHUJAN-VHack2026.git
 cd BILAHUJAN-VHack2026
-
 npm install
 ```
 
@@ -340,7 +339,6 @@ firebase deploy --only hosting
 
 ```bash
 firebase use vhack      # → bilahujan-vhack.web.app  ← WORK HERE
-firebase use kitahack   # → bilahujan-app.web.app    ← DO NOT DEPLOY HERE
 ```
 
 **🌐 V Hack Live Site:** https://bilahujan-vhack.web.app
