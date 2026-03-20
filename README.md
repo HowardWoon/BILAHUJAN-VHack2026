@@ -677,6 +677,7 @@ Step 5: "Call NADMA: 03-8064 2400"        ← if all searches fail
 | 5 | National Authority Command Centre | Firebase + NADMA API | Full government loop closed |
 | 6 | Manus Multi-Agent Swarm | Manus + MCP + Gemini | Parallel triage/routing/logistics agents |
 
+<<<<<<< HEAD
 ### 🔮 Phase 2 Deep Dive — Edge Computing & Offline-First Swarm
  
 > *"Standard AI models that depend on the cloud become useless."*
@@ -725,6 +726,8 @@ This directly satisfies the Case Study 3 mandatory requirement:
 **a self-healing swarm that operates as a collective brain at the edge —
 functioning even when the world is offline.**
 
+=======
+>>>>>>> a23f781df4332d959cf1e4ac0d9d341a00391702
 > **Phase 2 is the most critical:** on-device TensorFlow Lite makes BILAHUJAN operational with zero internet — exactly when it is most needed.
 
 **Why it scales:** The citizen-as-sensor model grows with every user — no hardware, no sensor deployment, no capex. 1,000 simultaneous reports = 1,000 active swarm nodes, handled by the same Firebase RTDB architecture live today.
