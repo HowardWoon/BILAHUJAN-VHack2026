@@ -62,11 +62,7 @@ export default function BottomNav({ activeTab, onTabChange }: BottomNavProps) {
           <span className="material-icons-round text-[26px]">notifications</span>
           <span className="text-[10px] font-bold uppercase tracking-tighter">Alert</span>
           {(activeAlertStateCount > 0 || unviewedUploads > 0) && activeTab !== 'alert' && (
-            <div className="absolute -top-1 right-[18%] min-w-[17px] h-[17px] bg-red-500 rounded-full border-2 border-white flex items-center justify-center animate-pulse">
-              <span className="text-[9px] font-black text-white leading-none">
-                {Math.min(99, Math.max(activeAlertStateCount, unviewedUploads)) > 9 ? '9+' : Math.max(activeAlertStateCount, unviewedUploads)}
-              </span>
-            </div>
+            <div className="absolute -top-0.5 right-[20%] w-2.5 h-2.5 bg-red-500 rounded-full border border-white animate-pulse" />
           )}
         </button>
 
