@@ -316,9 +316,9 @@ Firestore Collections:
 **Prerequisites:** Node.js v18+ · Firebase CLI (`npm install -g firebase-tools`)
 
 ```bash
-git clone https://github.com/HowardWoon/FEI-BILAHUJAN.git
-cd FEI-BILAHUJAN
-git checkout vhack-2026
+git clone https://github.com/HowardWoon/BILAHUJAN-VHack2026.git
+cd BILAHUJAN-VHack2026
+
 npm install
 ```
 
